@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -42,6 +43,7 @@ type Configure struct {
 	PlistProxy      string   `yaml:"plistproxy"`
 	Title           string   `yaml:"title"`
 	Debug           bool     `yaml:"debug"`
+	LogFile         string   `yaml:"log-file"`
 	GoogleTrackerID string   `yaml:"google-tracker-id"`
 	Auth            struct {
 		Type   string   `yaml:"type"` // openid|http|github
@@ -95,7 +97,7 @@ func versionMessage() string {
 func parseFlags() error {
 	// initial default conf
 	gcfg.Root = "./"
-	gcfg.Port = 8000
+	gcfg.Port = 9100
 	gcfg.Addr = ""
 	gcfg.Theme = "black"
 	gcfg.PlistProxy = defaultPlistProxy
@@ -104,14 +106,15 @@ func parseFlags() error {
 	gcfg.Title = "Go HTTP File Server"
 	gcfg.DeepPathMaxDepth = 5
 	gcfg.NoIndex = false
+	gcfg.LogFile = "gohttpserver.log"
 
 	kingpin.HelpFlag.Short('h')
 	kingpin.Version(versionMessage())
 	kingpin.Flag("conf", "config file path, yaml format").FileVar(&gcfg.Conf)
 	kingpin.Flag("root", "root directory, default ./").Short('r').StringVar(&gcfg.Root)
 	kingpin.Flag("prefix", "url prefix, eg /foo").StringVar(&gcfg.Prefix)
-	kingpin.Flag("port", "listen port, default 8000").IntVar(&gcfg.Port)
-	kingpin.Flag("addr", "listen address, eg 127.0.0.1:8000").Short('a').StringVar(&gcfg.Addr)
+	kingpin.Flag("port", "listen port, default 9100").IntVar(&gcfg.Port)
+	kingpin.Flag("addr", "listen address, eg 127.0.0.1:9100").Short('a').StringVar(&gcfg.Addr)
 	kingpin.Flag("cert", "tls cert.pem path").StringVar(&gcfg.Cert)
 	kingpin.Flag("key", "tls key.pem path").StringVar(&gcfg.Key)
 	kingpin.Flag("auth-type", "Auth type <http|openid>").StringVar(&gcfg.Auth.Type)
@@ -127,6 +130,7 @@ func parseFlags() error {
 	kingpin.Flag("google-tracker-id", "set to empty to disable it").StringVar(&gcfg.GoogleTrackerID)
 	kingpin.Flag("deep-path-max-depth", "set to -1 to not combine dirs").IntVar(&gcfg.DeepPathMaxDepth)
 	kingpin.Flag("no-index", "disable indexing").BoolVar(&gcfg.NoIndex)
+	kingpin.Flag("log-file", "log file path, default gohttpserver.log, set empty to disable").StringVar(&gcfg.LogFile)
 
 	kingpin.Parse() // first parse conf
 
@@ -199,7 +203,14 @@ func main() {
 	}
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
-	// make sure prefix matches: ^/.*[^/]$
+	if gcfg.LogFile != "" {
+		logFile, err := os.OpenFile(gcfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+	}
+
 	gcfg.Prefix = fixPrefix(gcfg.Prefix)
 	if gcfg.Prefix != "" {
 		log.Printf("url prefix: %s", gcfg.Prefix)
@@ -277,8 +288,28 @@ func main() {
 	if !strings.Contains(gcfg.Addr, ":") {
 		gcfg.Addr = ":" + gcfg.Addr
 	}
-	_, port, _ := net.SplitHostPort(gcfg.Addr)
-	log.Printf("listening on %s, local address http://%s:%s\n", strconv.Quote(gcfg.Addr), getLocalIP(), port)
+	host, port, _ := net.SplitHostPort(gcfg.Addr)
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	scheme := "http"
+	if gcfg.Key != "" && gcfg.Cert != "" {
+		scheme = "https"
+	}
+	localIP := getLocalIP()
+	fmt.Println("========================================")
+	fmt.Printf("  Go HTTP File Server v%s\n", VERSION)
+	fmt.Println("========================================")
+	fmt.Printf("  Listening:    %s://%s:%s\n", scheme, host, port)
+	fmt.Printf("  Local:       %s://localhost:%s\n", scheme, port)
+	if localIP != "" {
+		fmt.Printf("  Network:     %s://%s:%s\n", scheme, localIP, port)
+	}
+	fmt.Printf("  Root:        %s\n", gcfg.Root)
+	if gcfg.LogFile != "" {
+		fmt.Printf("  Log:         %s\n", gcfg.LogFile)
+	}
+	fmt.Println("========================================")
 
 	srv := &http.Server{
 		Handler: mainRouter,

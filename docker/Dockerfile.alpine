@@ -15,5 +15,5 @@ FROM alpine:3
 WORKDIR /app
 ADD assets /usr/local/bin/assets
 COPY --from=build /app/gohttpserver /usr/local/bin/gohttpserver
-EXPOSE 8000
+EXPOSE 9100
 ENTRYPOINT [ "/usr/local/bin/gohttpserver" ]
