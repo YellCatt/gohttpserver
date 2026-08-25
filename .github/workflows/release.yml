@@ -2,8 +2,7 @@ name: Build and Release
 
 on:
   push:
-    branches: [main, master]
-    tags: ['v*']      # 加上 tag 触发，这样 VERSION 才能取到 tag 名
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -13,68 +12,68 @@ jobs:
       matrix:
         target:
           - os: linux
+            arch: mipsle
+            suffix: linux_mipsle
+            goflags: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
+            ldflags: "-s -w -extldflags=-static"
+            tags: "netgo osusergo"
+          - os: linux
             arch: amd64
             suffix: linux_amd64
             goflags: GOOS=linux GOARCH=amd64
+            ldflags: "-s -w"
+            tags: ""
           - os: linux
             arch: arm64
             suffix: linux_arm64
             goflags: GOOS=linux GOARCH=arm64
-          - os: darwin
-            arch: amd64
-            suffix: darwin_amd64
-            goflags: GOOS=darwin GOARCH=amd64
-          - os: darwin
-            arch: arm64
-            suffix: darwin_arm64
-            goflags: GOOS=darwin GOARCH=arm64
+            ldflags: "-s -w"
+            tags: ""
           - os: windows
             arch: amd64
             suffix: windows_amd64
             goflags: GOOS=windows GOARCH=amd64
+            ldflags: "-s -w"
+            tags: ""
 
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
 
-      - name: Fix go modules
-        run: |
-          go clean -modcache
-          go mod tidy
+    - name: Fix go modules
+      run: |
+        go clean -modcache
+        go mod tidy
 
-      - name: Build for ${{ matrix.target.os }}/${{ matrix.target.arch }}
-        env:
-          GITCOMMIT: ${{ github.sha }}
-          BUILDTIME: ${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}
-        run: |
-          VERSION="dev"
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION=${{ github.ref_name }}
-          fi
-          EXT=""
-          if [ "${{ matrix.target.os }}" = "windows" ]; then
-            EXT=".exe"
-          fi
-          LDFLAGS="-s -w -X main.VERSION=${VERSION} -X main.BUILDTIME=${BUILDTIME} -X main.GITCOMMIT=${GITCOMMIT}"
-          ${{ matrix.target.goflags }} go build -ldflags="${LDFLAGS}" -o "gohttpserver_${{ matrix.target.suffix }}${EXT}"
-          ls -la gohttpserver_*
+    - name: Build for ${{ matrix.target.os }}/${{ matrix.target.arch }}
+      env:
+        GITCOMMIT: ${{ github.sha }}
+      run: |
+        VERSION="dev"
+        if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          VERSION=$(git describe --tags --abbrev=0)
+        fi
+        BUILDTIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        LDFLAGS="-s -w -X main.VERSION=${VERSION} -X main.BUILDTIME=${BUILDTIME} -X main.GITCOMMIT=${GITCOMMIT}"
+        ${{ matrix.target.goflags }} go build -ldflags="${LDFLAGS} ${{ matrix.target.ldflags }}" ${{ matrix.target.tags != '' && format('-tags="{0}"', matrix.target.tags) || '' }} -o gohttpserver_${{ matrix.target.suffix }}.${{ matrix.target.os == 'windows' && 'exe' || '' }}
+        ls -la gohttpserver_*
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gohttpserver_${{ matrix.target.suffix }}
-          path: gohttpserver_${{ matrix.target.suffix }}*
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: gohttpserver_${{ matrix.target.suffix }}
+        path: gohttpserver_${{ matrix.target.suffix }}.*
 
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref_type == 'tag' || github.event_name == 'push'
     permissions:
       contents: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -91,18 +90,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
-            gh release create "$VERSION" \
-              --title "Release $VERSION" \
-              --generate-notes \
-              artifacts/*
-          else
-            VERSION="dev-latest"
-            gh release delete "$VERSION" --yes 2>/dev/null || true
-            gh release create "$VERSION" \
-              --title "Development Build (Latest)" \
-              --notes "Automatic build from commit ${{ github.sha }}" \
-              --prerelease \
-              artifacts/*
-          fi
+          VERSION="dev-latest"
+          echo "使用固定版本tag: $VERSION"
+
+          gh release delete "$VERSION" --yes 2>/dev/null || true
+
+          gh release create "$VERSION" \
+            --title "Development Build (Latest)" \
+            --notes "Automatic build from commit ${{ github.sha }}%0A%0A**Platforms:**%0A- Linux amd64%0A- Linux arm64%0A- Linux mipsle (极路由2 - 已禁用CGO，静态编译)%0A- Windows amd64" \
+            --prerelease \
+            artifacts/*
