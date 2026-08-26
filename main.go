@@ -46,11 +46,12 @@ type Configure struct {
 	LogFile         string   `yaml:"log-file"`
 	GoogleTrackerID string   `yaml:"google-tracker-id"`
 	Auth            struct {
-		Type   string   `yaml:"type"` // openid|http|github
-		OpenID string   `yaml:"openid"`
-		HTTP   []string `yaml:"http"`
-		ID     string   `yaml:"id"`     // for oauth2
-		Secret string   `yaml:"secret"` // for oauth2
+		Type   string            `yaml:"type"` // openid|http|github
+		OpenID string            `yaml:"openid"`
+		HTTP   []string          `yaml:"http"`
+		Users  map[string]string `yaml:"users"`
+		ID     string            `yaml:"id"`     // for oauth2
+		Secret string            `yaml:"secret"` // for oauth2
 	} `yaml:"auth"`
 	DeepPathMaxDepth int  `yaml:"deep-path-max-depth"`
 	NoIndex          bool `yaml:"no-index"`
@@ -67,6 +68,7 @@ var (
 	defaultOpenID     = "https://login.netease.com/openid"
 	gcfg              = Configure{}
 	logger            = httpLogger{}
+	confPath          string
 
 	VERSION   = "unknown"
 	BUILDTIME = "unknown time"
@@ -108,9 +110,13 @@ func parseFlags() error {
 	gcfg.NoIndex = false
 	gcfg.LogFile = "gohttpserver.log"
 
+	defaultCfg := gcfg
+	defaultCfg.Auth.Type = "http"
+	defaultCfg.Auth.Users = map[string]string{"admin": "asd123456"}
+
 	kingpin.HelpFlag.Short('h')
 	kingpin.Version(versionMessage())
-	kingpin.Flag("conf", "config file path, yaml format").FileVar(&gcfg.Conf)
+	kingpin.Flag("conf", "config file path, yaml format").StringVar(&confPath)
 	kingpin.Flag("root", "root directory, default ./").Short('r').StringVar(&gcfg.Root)
 	kingpin.Flag("prefix", "url prefix, eg /foo").StringVar(&gcfg.Prefix)
 	kingpin.Flag("port", "listen port, default 9100").IntVar(&gcfg.Port)
@@ -132,18 +138,40 @@ func parseFlags() error {
 	kingpin.Flag("no-index", "disable indexing").BoolVar(&gcfg.NoIndex)
 	kingpin.Flag("log-file", "log file path, default gohttpserver.log, set empty to disable").StringVar(&gcfg.LogFile)
 
-	kingpin.Parse() // first parse conf
+	kingpin.Parse() // first parse
 
-	if gcfg.Conf != nil {
-		defer func() {
-			kingpin.Parse() // command line priority high than conf
-		}()
-		ymlData, err := ioutil.ReadAll(gcfg.Conf)
+	if confPath == "" {
+		confPath = "config.yaml"
+	}
+
+	// If config file doesn't exist, create it with defaults
+	if _, err := os.Stat(confPath); os.IsNotExist(err) {
+		data, err := yaml.Marshal(defaultCfg)
 		if err != nil {
 			return err
 		}
-		return yaml.Unmarshal(ymlData, &gcfg)
+		if err := ioutil.WriteFile(confPath, data, 0644); err != nil {
+			return err
+		}
+		log.Printf("Created default config file: %s", confPath)
 	}
+
+	// Read config file and unmarshal
+	ymlData, err := ioutil.ReadFile(confPath)
+	if err != nil {
+		return err
+	}
+	if err := yaml.Unmarshal(ymlData, &gcfg); err != nil {
+		return err
+	}
+
+	if gcfg.Auth.Type == "http" && len(gcfg.Auth.Users) == 0 && len(gcfg.Auth.HTTP) == 0 {
+		gcfg.Auth.Users = map[string]string{"admin": "asd123456"}
+	}
+
+	// Second parse: command line priority higher than config file
+	kingpin.Parse()
+
 	return nil
 }
 
@@ -171,14 +199,7 @@ func cors(next http.Handler) http.Handler {
 	})
 }
 
-func multiBasicAuth(auths []string) func(http.Handler) http.Handler {
-	userPassMap := make(map[string]string)
-	for _, auth := range auths {
-		userpass := strings.SplitN(auth, ":", 2)
-		if len(userpass) == 2 {
-			userPassMap[userpass[0]] = userpass[1]
-		}
-	}
+func multiBasicAuth(userPassMap map[string]string) func(http.Handler) http.Handler {
 	return httpauth.BasicAuth(httpauth.AuthOptions{
 		Realm: "Restricted",
 		AuthFunc: func(user, pass string, request *http.Request) bool {
@@ -245,7 +266,19 @@ func main() {
 	// HTTP Basic Authentication
 	switch gcfg.Auth.Type {
 	case "http":
-		hdlr = multiBasicAuth(gcfg.Auth.HTTP)(hdlr)
+		userPassMap := make(map[string]string)
+		for _, auth := range gcfg.Auth.HTTP {
+			userpass := strings.SplitN(auth, ":", 2)
+			if len(userpass) == 2 {
+				userPassMap[userpass[0]] = userpass[1]
+			}
+		}
+		for user, pass := range gcfg.Auth.Users {
+			userPassMap[user] = pass
+		}
+		if len(userPassMap) > 0 {
+			hdlr = multiBasicAuth(userPassMap)(hdlr)
+		}
 	case "openid":
 		handleOpenID(gcfg.Auth.OpenID, false) // FIXME(ssx): set secure default to false
 		// case "github":
