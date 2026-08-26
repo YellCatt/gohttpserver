@@ -98,7 +98,7 @@ func versionMessage() string {
 
 func parseFlags() error {
 	// initial default conf
-	gcfg.Root = "./"
+	gcfg.Root = "./files"
 	gcfg.Port = 9100
 	gcfg.Addr = ""
 	gcfg.Theme = "black"
@@ -235,6 +235,10 @@ func main() {
 	gcfg.Prefix = fixPrefix(gcfg.Prefix)
 	if gcfg.Prefix != "" {
 		log.Printf("url prefix: %s", gcfg.Prefix)
+	}
+
+	if err := os.MkdirAll(gcfg.Root, os.ModePerm); err != nil {
+		log.Fatal("Failed to create root directory:", err)
 	}
 
 	ss := NewHTTPStaticServer(gcfg.Root, gcfg.NoIndex)
