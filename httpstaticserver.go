@@ -59,7 +59,6 @@ type HTTPStaticServer struct {
 	Title            string
 	Theme            string
 	PlistProxy       string
-	GoogleTrackerID  string
 	AuthType         string
 	DeepPathMaxDepth int
 	NoIndex          bool

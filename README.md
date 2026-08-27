@@ -1,346 +1,279 @@
-# gohttpserver (not maintained)
+# Go HTTP File Server
 
-Alternatives
+一个基于 Go 语言的轻量级 HTTP 文件服务器，单文件二进制，零依赖，开箱即用。
 
-- <https://github.com/sigoden/dufs> Writtern in Rust
-- <https://github.com/9001/copyparty> Writtern in Python
-- <https://github.com/codeskyblue/servefs> (A new port file server project)
+## 功能特性
 
-# doc
-- Goal: Make the best HTTP File Server.
-- Features: Human-friendly UI, file uploading support, direct QR-code generation for Apple & Android install package.
+- HTTP 文件浏览与下载，支持目录列表、面包屑导航
+- 文件上传（支持大文件，带实时进度日志）
+- 文件删除与新建目录
+- ZIP 打包下载 / 上传 ZIP 自动解压
+- APK / IPA 安装包识别与二维码分发
+- HTTP Basic Auth / OpenID / OAuth2-Proxy 多种认证方式
+- 基于 `.ghs.yml` 的目录级权限控制（类似 `.htaccess`）
+- 全局文件搜索
+- CORS 跨域支持
+- Nginx 反向代理友好
+- 响应式前端，支持移动端
 
-- 目标: 做最好的HTTP文件服务器
-- 功能: 人性化的UI体验，文件的上传支持，安卓和苹果安装包的二维码直接生成。
-
-**Binaries** can be downloaded from [this repo releases](https://github.com/codeskyblue/gohttpserver/releases/)
-
-## Requirements
-Tested with go-1.16
-
-## Screenshots
-![screen](testdata/filetypes/gohttpserver.gif)
-
-## Features
-1. [x] Support QRCode code generate
-1. [x] Breadcrumb path quick change
-1. [x] All assets package to Standalone binary
-1. [x] Different file type different icon
-1. [x] Support show or hide hidden files
-1. [x] Upload support (auth by token or session)
-1. [x] README.md preview
-1. [x] HTTP Basic Auth
-1. [x] Partial reload pages when directory change
-1. [x] When only one dir under dir, path will combine two together
-1. [x] Directory zip download
-1. [x] Apple ipa auto generate .plist file, qrcode can be recognized by iphone (Require https)
-1. [x] Plist proxy
-1. [ ] Download count statistics
-1. [x] CORS enabled
-1. [ ] Offline download
-1. [ ] Code file preview
-1. [ ] Edit file support
-1. [x] Global file search
-1. [x] Hidden work `download` and `qrcode` in small screen
-1. [x] Theme select support
-1. [x] OK to working behide Nginx
-1. [x] \.ghs.yml support (like \.htaccess)
-1. [ ] Calculate md5sum and sha
-1. [ ] Folder upload
-1. [ ] Support sort by size or modified time
-1. [x] Add version info into index page
-1. [ ] Add api `/-/info/some.(apk|ipa)` to get detail info
-1. [x] Add api `/-/apk/info/some.apk` to get android package info
-1. [x] Auto tag version
-1. [x] Custom title support
-1. [x] Support setting from conf file
-1. [x] Quick copy download link
-1. [x] Show folder size
-1. [x] Create folder
-1. [x] Skip delete confirm when alt pressed
-1. [x] Support unzip zip file when upload(with form: unzip=true)
-
-## Installation
-```bash
-$ go install github.com/codeskyblue/gohttpserver@latest
-```
-
-Or download binaries from [github releases](https://github.com/codeskyblue/gohttpserver/releases)
-
-If you are using Mac, simply run command
+## 快速开始
 
 ```bash
-$ brew install codeskyblue/tap/gohttpserver
+gohttpserver
 ```
 
-## Usage
-Listen on port 8000 of all interfaces, and enable file uploading.
+首次启动会自动在当前目录生成 `config.yaml` 配置文件，所有配置均通过此文件管理。
 
-```
-$ gohttpserver -r ./ --port 8000 --upload
-```
+## 配置文件
 
-Use command `gohttpserver --help` to see more usage.
-
-## Docker Usage
-share current directory
-
-```bash
-$ docker run -it --rm -p 8000:8000 -v $PWD:/app/public --name gohttpserver codeskyblue/gohttpserver
-```
-
-Share current directory with http basic auth
-
-```bash
-$ docker run -it --rm -p 8000:8000 -v $PWD:/app/public --name gohttpserver \
-  codeskyblue/gohttpserver \
-  --auth-type http --auth-http username1:password1 --auth-http username2:password2
-```
-
-Share current directory with openid auth. (Works only in netease company.)
-
-```bash
-$ docker run -it --rm -p 8000:8000 -v $PWD:/app/public --name gohttpserver \
-  codeskyblue/gohttpserver \
-  --auth-type openid
-```
-
-To build image yourself, please change the PWD to the root of this repo.
-
-```bash
-$ cd gohttpserver/
-$ docker build -t codeskyblue/gohttpserver -f docker/Dockerfile .
-```
-
-## Authentication options
-- Enable basic http authentication
-
-  ```sh
-  $ gohttpserver --auth-type http --auth-http username1:password1 --auth-http username2:password2
-  ```
-
-- Use openid auth
-
-  ```sh
-  $ gohttpserver --auth-type openid --auth-openid https://login.example-hostname.com/openid/
-  ```
-
-- Use oauth2-proxy with
-
-  ```sh
-  $ gohttpserver --auth-type oauth2-proxy
-  ```
-  You can configure to let a http reverse proxy handling authentication. 
-  When using oauth2-proxy, the backend will use identification info from request headers `X-Auth-Request-Email` as userId and `X-Auth-Request-Fullname` as user's display name. 
-  Please config your oauth2 reverse proxy yourself.
-  More about [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy).
-  
-  All required headers list as following.
-
-  |header|value|
-  |---|---|
-  |X-Auth-Request-Email| userId |
-  |X-Auth-Request-Fullname| user's display name(urlencoded) |
-  |X-Auth-Request-User| user's nickname (mostly email prefix) |
-
-- Enable upload
-
-  ```sh
-  $ gohttpserver --upload
-  ```
-
-- Enable delete and Create folder
-
-  ```sh
-  $ gohttpserver --delete
-  ```
-
-## Advanced usage
-Add access rule by creating a `.ghs.yml` file under a sub-directory. An example:
+所有参数通过 `config.yaml` 管理，首次启动自动生成默认配置：
 
 ```yaml
----
+addr: ""
+port: 9100
+root: "./files"
+prefix: ""
+upload: false
+delete: false
+theme: "black"
+title: "Go HTTP File Server"
+debug: false
+log-file: "gohttpserver.log"
+deep-path-max-depth: 5
+no-index: false
+plistproxy: "https://plistproxy.herokuapp.com/plist"
+auth:
+  type: "http"
+  users:
+    admin: "asd123456"
+  http: []
+  openid: "https://login.netease.com/openid"
+```
+
+### 配置项说明
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `addr` | 监听地址，空为全部接口 | 空 |
+| `port` | 监听端口 | `9100` |
+| `root` | 文件根目录 | `./files` |
+| `prefix` | URL 前缀，如 `/foo` | 空 |
+| `upload` | 启用上传功能 | `false` |
+| `delete` | 启用删除和新建目录 | `false` |
+| `auth.type` | 认证类型：`http` / `openid` / `oauth2-proxy` | `http` |
+| `auth.users` | HTTP 认证用户表（用户名:密码） | admin |
+| `auth.openid` | OpenID 认证地址 | - |
+| `theme` | 主题：`black` / `green` | `black` |
+| `debug` | 调试模式，输出详细日志 | `false` |
+| `log-file` | 日志文件路径，空则不写文件 | `gohttpserver.log` |
+| `xheaders` |  Behind Nginx 时设为 `true` | `false` |
+| `plistproxy` | IPA Plist 代理地址 | 默认代理 |
+| `deep-path-max-depth` | 目录合并深度，`-1` 禁用 | `5` |
+| `no-index` | 禁用文件搜索索引 | `false` |
+
+## 权限控制
+
+在任意目录下创建 `.ghs.yml` 文件，可以精确控制该目录的访问权限：
+
+```yaml
 upload: false
 delete: false
 users:
-- email: "codeskyblue@codeskyblue.com"
-  delete: true
-  upload: true
-  token: 4567gf8asydhf293r23r
+  - email: "admin@example.com"
+    upload: true
+    delete: true
+    token: "your-secret-token"
+accessTables:
+  - regex: "\.secret$"
+    allow: false
 ```
 
-In this case, if openid auth is enabled and user "codeskyblue@codeskyblue.com" has logged in, he/she can delete/upload files under the directory where the `.ghs.yml` file exits.
+- `upload` / `delete`: 控制该目录的上传/删除权限
+- `users`: 针对特定用户设置不同权限
+- `token`: 用于 API 上传时的身份验证
+- `accessTables`: 文件级别的访问控制规则（正则匹配）
 
-`token` is used for upload. see [upload with curl](#upload-with-curl)
+## 上传接口
 
-For example, in the following directory hierarchy, users can delete/uploade files in directory `foo`, but he/she cannot do this in directory `bar`.
+### Web 界面
 
+直接通过浏览器访问，点击上传按钮即可。
+
+### CURL 命令
+
+```bash
+# 上传文件
+curl -F file=@localfile.txt http://server:port/dir
+
+# 上传并重命名
+curl -F file=@localfile.txt -F filename=newname.txt http://server:port/dir
+
+# 使用 token 上传
+curl -F file=@file.zip -F token=your-token http://server:port/dir
+
+# 上传并自动解压
+curl -F file=@archive.zip -F unzip=true http://server:port/dir
 ```
-root -
-  |-- foo
-  |    |-- .ghs.yml
-  |    `-- world.txt 
-  `-- bar
-       `-- hello.txt
-```
 
-User can specify config file name with `--conf`, see [example config.yml](testdata/config.yml).
+注意：文件名不能包含 `\/:*<>|` 字符。
 
-To specify which files is hidden and which file is visible, add the following lines to `.ghs.yml`
+## 认证方式
+
+### HTTP Basic Auth
+
+编辑 `config.yaml`：
 
 ```yaml
-accessTables:
-- regex: block.file
-  allow: false
-- regex: visual.file
-  allow: true
+auth:
+  type: "http"
+  users:
+    admin: "your_password"
+    user2: "password2"
 ```
 
-### ipa plist proxy
-This is used for server on which https is enabled. default use <https://plistproxy.herokuapp.com/plist>
+### OpenID 认证
+
+```yaml
+auth:
+  type: "openid"
+  openid: "https://login.example.com/openid"
+```
+
+### OAuth2 Proxy
+
+```yaml
+auth:
+  type: "oauth2-proxy"
+```
+
+由反向代理（如 OAuth2 Proxy）处理认证，后端从请求头读取用户信息：
+- `X-Auth-Request-Email`: 用户邮箱
+- `X-Auth-Request-Fullname`: 用户昵称
+- `X-Auth-Request-User`: 用户名
+
+## 部署
+
+### 编译
 
 ```bash
-$ gohttpserver --plistproxy=https://someproxyhost.com/
+# 当前平台编译
+go build -o gohttpserver .
+
+# 交叉编译 (Linux ARM 64位)
+GOOS=linux GOARCH=arm64 go build -o gohttpserver .
+
+# 交叉编译 (Linux ARM 32位)
+GOOS=linux GOARCH=arm GOARM=7 go build -o gohttpserver .
+
+# 交叉编译 (Linux x86_64)
+GOOS=linux GOARCH=amd64 go build -o gohttpserver .
 ```
 
-Test if proxy works:
+### 部署到设备
 
-```sh
-$ http POST https://someproxyhost.com/plist < app.plist
-{
-	"key": "18f99211"
-}
-$ http GET https://someproxyhost.com/plist/18f99211
-# show the app.plist content
+```bash
+# 传输到目标设备
+scp gohttpserver user@device:/path/to/
+
+# 在设备上赋予执行权限并运行
+chmod +x gohttpserver
+./gohttpserver
 ```
 
-If your ghs running behide nginx server and have https configed. plistproxy will be disabled automaticly.
+### Nginx 反向代理
 
-### Upload with CURL
-For example, upload a file named `foo.txt` to directory `somedir`
-
-```sh
-$ curl -F file=@foo.txt localhost:8000/somedir
-{"destination":"somedir/foo.txt","success":true}
-# upload with token
-$ curl -F file=@foo.txt -F token=12312jlkjafs localhost:8000/somedir
-{"destination":"somedir/foo.txt","success":true}
-
-# upload and change filename
-$ curl -F file=@foo.txt -F filename=hi.txt localhost:8000/somedir
-{"destination":"somedir/hi.txt","success":true}
-```
-
-Upload zip file and unzip it (zip file will be delete when finished unzip)
-
-```
-$ curl -F file=@pkg.zip -F unzip=true localhost:8000/somedir
-{"success": true}
-```
-
-Note: `\/:*<>|` are not allowed in filenames.
-
-### Deploy with nginx
-Recommended configuration, assume your gohttpserver listening on `127.0.0.1:8200`
-
-```
+```nginx
 server {
   listen 80;
-  server_name your-domain-name.com;
+  server_name your-domain.com;
 
   location / {
-    proxy_pass http://127.0.0.1:8200; # here need to change
-    proxy_redirect off;
-    proxy_set_header  Host    $host;
-    proxy_set_header  X-Real-IP $remote_addr;
-    proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header  X-Forwarded-Proto $scheme;
-
-    client_max_body_size 0; # disable upload limit
+    proxy_pass http://127.0.0.1:9100;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    client_max_body_size 0;
   }
 }
 ```
 
-gohttpserver should started with `--xheaders` argument when behide nginx.
+后端 `config.yaml` 中设置 `xheaders: true`：
 
-Refs: <http://nginx.org/en/docs/http/ngx_http_core_module.html#client_max_body_size>
+```yaml
+xheaders: true
+upload: true
+delete: true
+```
 
-gohttpserver also support `--prefix` flag which will help to when meet `/` is occupied by other service. relative issue <https://github.com/codeskyblue/gohttpserver/issues/105>
+## 调试与排障
 
-Usage example:
+### 启用调试日志
 
+编辑 `config.yaml`：
+
+```yaml
+debug: true
+log-file: "server.log"
+```
+
+调试模式会输出：
+- 请求的方法、路径、Content-Length
+- 上传前/后的内存快照（HeapAlloc、GC 次数）
+- Multipart 解析过程
+- 文件写入进度（每 5MB 或 5 秒输出一次）
+- 写入速度和耗时
+
+### 常见问题
+
+**Q: 上传大文件失败（如 40MB 文件在 128MB 设备上）？**
+
+A: 启用 `debug: true` 查看日志，关注以下几点：
+1. `Content-Length` 是否正确接收
+2. `HeapAlloc` 是否接近设备内存上限
+3. 上传进度日志在哪一步停止（网络超时 / IO 错误 / 内存不足）
+4. GC 次数是否异常增多
+
+**Q: `syntax error: unexpected redirection`？**
+
+A: 编译目标平台与运行平台不匹配。Windows 编译的 `.exe` 无法在 Linux 上运行。请使用交叉编译：
 ```bash
-# for gohttpserver
-$ gohttpserver --prefix /foo --addr :8200 --xheaders
+GOOS=linux GOARCH=arm64 go build -o gohttpserver .
 ```
 
-**Nginx settigns**
+**Q: 中文文件名乱码？**
+
+A: 确保请求使用 `UTF-8` 编码，前端页面已设置 `<meta charset="utf-8">`。
+
+**Q: 上传超时？**
+
+A: 如果使用 Nginx 反向代理，需在 Nginx 配置中增大 `client_max_body_size` 和 `proxy_read_timeout`。
+
+## 项目结构
 
 ```
-server {
-  listen 80;
-  server_name your-domain-name.com;
-
-  location /foo {
-    proxy_pass http://127.0.0.1:8200; # here need to change
-    proxy_redirect off;
-    proxy_set_header  Host    $host;
-    proxy_set_header  X-Real-IP $remote_addr;
-    proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header  X-Forwarded-Proto $scheme;
-
-    client_max_body_size 0; # disable upload limit
-  }
-}
+gohttpserver/
+├── main.go              # 入口，配置解析，服务器启动
+├── httpstaticserver.go  # 核心：HTTP 处理逻辑（上传、下载、目录列表等）
+├── assets.go            # 静态资源嵌入
+├── assets/              # 前端资源（HTML、CSS、JS、图标）
+├── utils.go             # 工具函数
+├── zip.go               # ZIP 压缩/解压
+├── ipa.go               # IPA 安装包处理
+├── oauth2-proxy.go      # OAuth2 代理认证
+├── openid-login.go      # OpenID 认证
+├── res.go               # 资源定义
+└── config.yaml          # 配置文件（首次运行自动生成）
 ```
 
-## FAQ
-- [How to generate self signed certificate with openssl](http://stackoverflow.com/questions/10175812/how-to-create-a-self-signed-certificate-with-openssl)
+## 技术栈
 
-### How the query is formated
-The search query follows common format rules just like Google. Keywords are seperated with space(s), keywords with prefix `-` will be excluded in search results.
+- 语言：Go
+- 路由：[gorilla/mux](https://github.com/gorilla/mux)
+- 前端：Vue.js + Bootstrap + jQuery
+- 文件图标：EasyIcon
+- Markdown 渲染：Showdown
 
-1. `hello world` means must contains `hello` and `world`
-1. `hello -world` means must contains `hello` but not contains `world`
+## 开源协议
 
-## Developer Guide
-Depdencies are managed by [govendor](https://github.com/kardianos/govendor)
-
-1. Build develop version. **assets** directory must exists
-
-  ```sh
-  $ go build
-  $ ./gohttpserver
-  ```
-2. Build single binary release
-
-  ```sh
-  $ go build
-  ```
-
-Theme are defined in [assets/themes](assets/themes) directory. Now only two themes are available, "black" and "green".
-
-
-## Reference Web sites
-
-* Core lib Vue <https://vuejs.org.cn/>
-* Icon from <http://www.easyicon.net/558394-file_explorer_icon.html>
-* Code Highlight <https://craig.is/making/rainbows>
-* Markdown Parser <https://github.com/showdownjs/showdown>
-* Markdown CSS <https://github.com/sindresorhus/github-markdown-css>
-* Upload support <http://www.dropzonejs.com/>
-* ScrollUp <https://markgoodyear.com/2013/01/scrollup-jquery-plugin/>
-* Clipboard <https://clipboardjs.com/>
-* Underscore <http://underscorejs.org/>
-
-**Go Libraries**
-
-* [vfsgen](https://github.com/shurcooL/vfsgen) Not using now
-* [go-bindata-assetfs](https://github.com/elazarl/go-bindata-assetfs) Not using now
-* <http://www.gorillatoolkit.org/pkg/handlers>
-
-## History
-The old version is hosted at <https://github.com/codeskyblue/gohttp>
-
-## LICENSE
-This project is licensed under [MIT](LICENSE).
+MIT License

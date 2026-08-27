@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -9,20 +8,17 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
-	"github.com/alecthomas/kingpin"
 	accesslog "github.com/codeskyblue/go-accesslog"
 	"github.com/go-yaml/yaml"
 	"github.com/goji/httpauth"
@@ -47,7 +43,7 @@ type Configure struct {
 	Title           string   `yaml:"title"`
 	Debug           bool     `yaml:"debug"`
 	LogFile         string   `yaml:"log-file"`
-	GoogleTrackerID string   `yaml:"google-tracker-id"`
+	LogFormat       string   `yaml:"log-format"`
 	Auth            struct {
 		Type   string            `yaml:"type"` // openid|http|github
 		OpenID string            `yaml:"openid"`
@@ -63,25 +59,30 @@ type Configure struct {
 type httpLogger struct{}
 
 func (l httpLogger) Log(record accesslog.LogRecord) {
-	log.Printf("%s - %s %d %s", record.Ip, record.Method, record.Status, record.Uri)
+	slogLogger.Info("access",
+		slog.String("ip", record.Ip),
+		slog.String("method", record.Method),
+		slog.Int("status", record.Status),
+		slog.String("uri", record.Uri),
+	)
 }
 
 func debugLog(format string, args ...interface{}) {
 	if gcfg.Debug {
-		log.Printf("[DEBUG] "+format, args...)
+		slogLogger.Debug(fmt.Sprintf(format, args...))
 	}
 }
 
 func infoLog(format string, args ...interface{}) {
-	log.Printf("[INFO] "+format, args...)
+	slogLogger.Info(fmt.Sprintf(format, args...))
 }
 
 func warnLog(format string, args ...interface{}) {
-	log.Printf("[WARN] "+format, args...)
+	slogLogger.Warn(fmt.Sprintf(format, args...))
 }
 
 func errorLog(format string, args ...interface{}) {
-	log.Printf("[ERROR] "+format, args...)
+	slogLogger.Error(fmt.Sprintf(format, args...))
 }
 
 var (
@@ -89,7 +90,7 @@ var (
 	defaultOpenID     = "https://login.netease.com/openid"
 	gcfg              = Configure{}
 	logger            = httpLogger{}
-	confPath          string
+	slogLogger        *slog.Logger
 
 	VERSION   = "v1.0.0_20260827_1553"
 	BUILDTIME = "unknown time"
@@ -97,72 +98,63 @@ var (
 	SITE      = "https://github.com/codeskyblue/gohttpserver"
 )
 
-func versionMessage() string {
-	t := template.Must(template.New("version").Parse(`GoHTTPServer
-  Version:        {{.Version}}
-  Go version:     {{.GoVersion}}
-  OS/Arch:        {{.OSArch}}
-  Git commit:     {{.GitCommit}}
-  Built:          {{.Built}}
-  Site:           {{.Site}}`))
-	buf := bytes.NewBuffer(nil)
-	t.Execute(buf, map[string]interface{}{
-		"Version":   VERSION,
-		"GoVersion": runtime.Version(),
-		"OSArch":    runtime.GOOS + "/" + runtime.GOARCH,
-		"GitCommit": GITCOMMIT,
-		"Built":     BUILDTIME,
-		"Site":      SITE,
+func init() {
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
 	})
-	return buf.String()
+	slogLogger = slog.New(handler)
 }
 
-func parseFlags() error {
+func initLogger() {
+	level := slog.LevelInfo
+	if gcfg.Debug {
+		level = slog.LevelDebug
+	}
+
+	var writers []io.Writer
+	writers = append(writers, os.Stderr)
+
+	if gcfg.LogFile != "" {
+		logFile, err := os.OpenFile(gcfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			slogLogger.Error("打开日志文件失败", "error", err)
+			return
+		}
+		writers = append(writers, logFile)
+	}
+
+	w := io.MultiWriter(writers...)
+
+	var handler slog.Handler
+	if gcfg.LogFormat == "json" {
+		handler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
+	} else {
+		handler = slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
+	}
+
+	slogLogger = slog.New(handler)
+}
+
+func loadConfig() error {
 	gcfg.Root = "./files"
 	gcfg.Port = 9100
 	gcfg.Addr = ""
 	gcfg.Theme = "black"
+	gcfg.Upload = true
+	gcfg.Delete = true
 	gcfg.PlistProxy = defaultPlistProxy
 	gcfg.Auth.OpenID = defaultOpenID
-	gcfg.GoogleTrackerID = "UA-81205425-2"
 	gcfg.Title = "Go HTTP File Server"
 	gcfg.DeepPathMaxDepth = 5
 	gcfg.NoIndex = false
 	gcfg.LogFile = "gohttpserver.log"
+	gcfg.LogFormat = "text"
 
 	defaultCfg := gcfg
 	defaultCfg.Auth.Type = "http"
 	defaultCfg.Auth.Users = map[string]string{"admin": "asd123456"}
 
-	kingpin.HelpFlag.Short('h')
-	kingpin.Version(versionMessage())
-	kingpin.Flag("conf", "config file path, yaml format").StringVar(&confPath)
-	kingpin.Flag("root", "root directory, default ./").Short('r').StringVar(&gcfg.Root)
-	kingpin.Flag("prefix", "url prefix, eg /foo").StringVar(&gcfg.Prefix)
-	kingpin.Flag("port", "listen port, default 9100").IntVar(&gcfg.Port)
-	kingpin.Flag("addr", "listen address, eg 127.0.0.1:9100").Short('a').StringVar(&gcfg.Addr)
-	kingpin.Flag("cert", "tls cert.pem path").StringVar(&gcfg.Cert)
-	kingpin.Flag("key", "tls key.pem path").StringVar(&gcfg.Key)
-	kingpin.Flag("auth-type", "Auth type <http|openid>").StringVar(&gcfg.Auth.Type)
-	kingpin.Flag("auth-http", "HTTP basic auth (ex: user:pass)").StringsVar(&gcfg.Auth.HTTP)
-	kingpin.Flag("auth-openid", "OpenID auth identity url").StringVar(&gcfg.Auth.OpenID)
-	kingpin.Flag("theme", "web theme, one of <black|green>").StringVar(&gcfg.Theme)
-	kingpin.Flag("upload", "enable upload support").BoolVar(&gcfg.Upload)
-	kingpin.Flag("delete", "enable delete support").BoolVar(&gcfg.Delete)
-	kingpin.Flag("xheaders", "used when behide nginx").BoolVar(&gcfg.XHeaders)
-	kingpin.Flag("debug", "enable debug mode").BoolVar(&gcfg.Debug)
-	kingpin.Flag("plistproxy", "plist proxy when server is not https").Short('p').StringVar(&gcfg.PlistProxy)
-	kingpin.Flag("title", "server title").StringVar(&gcfg.Title)
-	kingpin.Flag("google-tracker-id", "set to empty to disable it").StringVar(&gcfg.GoogleTrackerID)
-	kingpin.Flag("deep-path-max-depth", "set to -1 to not combine dirs").IntVar(&gcfg.DeepPathMaxDepth)
-	kingpin.Flag("no-index", "disable indexing").BoolVar(&gcfg.NoIndex)
-	kingpin.Flag("log-file", "log file path, default gohttpserver.log, set empty to disable").StringVar(&gcfg.LogFile)
-
-	kingpin.Parse()
-
-	if confPath == "" {
-		confPath = "config.yaml"
-	}
+	confPath := "config.yaml"
 
 	debugLog("使用配置文件路径: %s", confPath)
 
@@ -197,9 +189,6 @@ func parseFlags() error {
 		gcfg.Auth.Users = map[string]string{"admin": "asd123456"}
 		debugLog("未配置HTTP用户，使用默认账户")
 	}
-
-	kingpin.Parse()
-	debugLog("命令行参数解析完成")
 
 	return nil
 }
@@ -244,9 +233,12 @@ func multiBasicAuth(userPassMap map[string]string) func(http.Handler) http.Handl
 }
 
 func main() {
-	if err := parseFlags(); err != nil {
-		log.Fatal(err)
+	if err := loadConfig(); err != nil {
+		slogLogger.Error("加载配置失败", "error", err)
+		os.Exit(1)
 	}
+
+	initLogger()
 
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
@@ -260,16 +252,9 @@ func main() {
 		fmt.Printf("--- 配置信息 ---\n%s\n", string(data))
 		debugLog("调试模式已开启")
 	}
-	log.SetFlags(log.Lshortfile | log.LstdFlags)
-	debugLog("日志格式: 文件位置 + 标准时间戳")
+	debugLog("日志初始化完成: format=%s level=%v", gcfg.LogFormat, map[bool]string{true: "debug", false: "info"}[gcfg.Debug])
 
 	if gcfg.LogFile != "" {
-		logFile, err := os.OpenFile(gcfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		if err != nil {
-			errorLog("打开日志文件失败: %v", err)
-			log.Fatal(err)
-		}
-		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
 		infoLog("日志文件: %s", gcfg.LogFile)
 	} else {
 		infoLog("未配置日志文件，日志仅输出到控制台")
@@ -282,14 +267,13 @@ func main() {
 
 	if err := os.MkdirAll(gcfg.Root, os.ModePerm); err != nil {
 		errorLog("创建根目录失败: %v", err)
-		log.Fatal("创建根目录失败:", err)
+		os.Exit(1)
 	}
 
 	ss := NewHTTPStaticServer(gcfg.Root, gcfg.NoIndex)
 	ss.Prefix = gcfg.Prefix
 	ss.Theme = gcfg.Theme
 	ss.Title = gcfg.Title
-	ss.GoogleTrackerID = gcfg.GoogleTrackerID
 	ss.Upload = gcfg.Upload
 	ss.Delete = gcfg.Delete
 	ss.AuthType = gcfg.Auth.Type
@@ -299,7 +283,7 @@ func main() {
 		u, err := url.Parse(gcfg.PlistProxy)
 		if err != nil {
 			errorLog("解析PlistProxy地址失败: %v", err)
-			log.Fatal(err)
+			os.Exit(1)
 		}
 		u.Scheme = "https"
 		ss.PlistProxy = u.String()
@@ -433,7 +417,7 @@ func main() {
 	}
 	if err != nil {
 		errorLog("服务启动失败: %v", err)
-		log.Fatal(err)
+		os.Exit(1)
 	}
 }
 
