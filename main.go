@@ -91,7 +91,7 @@ var (
 	logger            = httpLogger{}
 	confPath          string
 
-	VERSION   = "unknown"
+	VERSION   = "v1.0.0_20260827_1553"
 	BUILDTIME = "unknown time"
 	GITCOMMIT = "unknown git commit"
 	SITE      = "https://github.com/codeskyblue/gohttpserver"
