@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/alecthomas/kingpin"
 	accesslog "github.com/codeskyblue/go-accesslog"
@@ -61,6 +62,12 @@ type httpLogger struct{}
 
 func (l httpLogger) Log(record accesslog.LogRecord) {
 	log.Printf("%s - %s %d %s", record.Ip, record.Method, record.Status, record.Uri)
+}
+
+func debugLog(format string, args ...interface{}) {
+	if gcfg.Debug {
+		log.Printf("[DEBUG] "+format, args...)
+	}
 }
 
 var (
@@ -218,9 +225,17 @@ func main() {
 	if err := parseFlags(); err != nil {
 		log.Fatal(err)
 	}
+
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	time.Local = loc
+
 	if gcfg.Debug {
 		data, _ := yaml.Marshal(gcfg)
 		fmt.Printf("--- config ---\n%s\n", string(data))
+		log.Printf("[DEBUG] Debug mode enabled, timezone: %s", loc)
 	}
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 

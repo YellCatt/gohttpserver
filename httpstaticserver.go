@@ -138,21 +138,24 @@ func (s *HTTPStaticServer) hIndex(w http.ResponseWriter, r *http.Request) {
 	path := mux.Vars(r)["path"]
 	realPath := s.getRealPath(r)
 	if r.FormValue("json") == "true" {
+		debugLog("hIndex JSON list: path=%s realPath=%s", path, realPath)
 		s.hJSONList(w, r)
 		return
 	}
 
 	if r.FormValue("op") == "info" {
+		debugLog("hIndex info: path=%s realPath=%s", path, realPath)
 		s.hInfo(w, r)
 		return
 	}
 
 	if r.FormValue("op") == "archive" {
+		debugLog("hIndex archive: path=%s realPath=%s", path, realPath)
 		s.hZip(w, r)
 		return
 	}
 
-	log.Println("GET", path, realPath)
+	debugLog("request: method=%s path=%s realPath=%s isDir=%v", r.Method, path, realPath, isDir(realPath))
 	if r.FormValue("raw") == "false" || isDir(realPath) {
 		if r.Method == "HEAD" {
 			return
@@ -185,7 +188,9 @@ func (s *HTTPStaticServer) hDelete(w http.ResponseWriter, req *http.Request) {
 
 	// TODO: path safe check
 	err := os.RemoveAll(realPath)
+	debugLog("delete: path=%s", realPath)
 	if err != nil {
+		debugLog("delete failed: path=%s error=%v", realPath, err)
 		pathErr, ok := err.(*os.PathError)
 		if ok {
 			http.Error(w, pathErr.Op+" "+path+": "+pathErr.Err.Error(), 500)
@@ -199,6 +204,7 @@ func (s *HTTPStaticServer) hDelete(w http.ResponseWriter, req *http.Request) {
 
 func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Request) {
 	dirpath := s.getRealPath(req)
+	debugLog("upload/mkdir request: method=%s dirpath=%s", req.Method, dirpath)
 
 	// check auth
 	auth := s.readAccessConf(dirpath)
@@ -246,6 +252,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	}
 
 	dstPath := filepath.Join(dirpath, filename)
+	debugLog("upload: filename=%s size=%d dstPath=%s", filename, header.Size, dstPath)
 
 	// Large file (>32MB) will store in tmp directory
 	// The quickest operation is call os.Move instead of os.Copy
@@ -281,6 +288,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 
 	if req.FormValue("unzip") == "true" {
+		debugLog("unzip: dstPath=%s dirpath=%s", dstPath, dirpath)
 		err = unzipFile(dstPath, dirpath)
 		os.Remove(dstPath)
 		message := "success"
@@ -578,6 +586,7 @@ func (s *HTTPStaticServer) hJSONList(w http.ResponseWriter, r *http.Request) {
 	requestPath := mux.Vars(r)["path"]
 	realPath := s.getRealPath(r)
 	search := r.FormValue("search")
+	debugLog("hJSONList: requestPath=%s realPath=%s search=%s", requestPath, realPath, search)
 	auth := s.readAccessConf(realPath)
 	auth.Upload = auth.canUpload(r)
 	auth.Delete = auth.canDelete(r)
@@ -725,6 +734,7 @@ func (s *HTTPStaticServer) defaultAccessConf() AccessConf {
 }
 
 func (s *HTTPStaticServer) readAccessConf(realPath string) (ac AccessConf) {
+	debugLog("readAccessConf: realPath=%s", realPath)
 	relativePath, err := filepath.Rel(s.Root, realPath)
 	if err != nil || relativePath == "." || relativePath == "" { // actually relativePath is always "." if root == realPath
 		ac = s.defaultAccessConf()

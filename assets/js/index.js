@@ -146,7 +146,7 @@ var vm = new Vue({
       return pathJoin([location.pathname].concat(filepath.split("/").map(v => encodeURIComponent(v))))
     },
     formatTime: function (timestamp) {
-      var m = moment(timestamp);
+      var m = moment.utc(timestamp).utcOffset(8 * 60);
       if (this.mtimeTypeFromNow) {
         return m.fromNow();
       }
@@ -422,7 +422,7 @@ function loadFileList(pathname) {
 }
 
 Vue.filter('fromNow', function (value) {
-  return moment(value).fromNow();
+  return moment.utc(value).utcOffset(8 * 60).fromNow();
 })
 
 Vue.filter('formatBytes', function (value) {
