@@ -332,6 +332,18 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	debugLog("开始解析multipart请求...")
 	reader, err := req.MultipartReader()
 	if err != nil {
+		contentType := req.Header.Get("Content-Type")
+		isMultipart := strings.HasPrefix(contentType, "multipart/form-data")
+		if isMultipart && contentLength > 0 {
+			errorLog("multipart解析失败(Content-Type=%s, Content-Length=%d): %v", contentType, contentLength, err)
+			w.Header().Set("Content-Type", "application/json;charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "multipart解析失败: " + err.Error(),
+			})
+			return
+		}
 		debugLog("非multipart请求，可能是仅创建目录: %s 错误=%v", absDirpath, err)
 		w.Header().Set("Content-Type", "application/json;charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
