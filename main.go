@@ -85,6 +85,8 @@ func errorLog(format string, args ...interface{}) {
 	slogLogger.Error(fmt.Sprintf(format, args...))
 }
 
+const VERSION = "v1.0.0_20260827_1553"
+
 var (
 	defaultPlistProxy = "https://plistproxy.herokuapp.com/plist"
 	defaultOpenID     = "https://login.netease.com/openid"
@@ -93,7 +95,6 @@ var (
 	slogLogger        *slog.Logger
 	ss                *HTTPStaticServer
 
-	VERSION   = "v1.0.0_20260827_1553"
 	BUILDTIME = "unknown time"
 	GITCOMMIT = "unknown git commit"
 	SITE      = "https://github.com/codeskyblue/gohttpserver"
