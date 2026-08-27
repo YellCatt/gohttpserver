@@ -46,6 +46,7 @@ var vm = new Vue({
     location: window.location,
     breadcrumb: [],
     showHidden: false,
+    loading: true,
     previewMode: false,
     preview: {
       filename: '',
@@ -54,94 +55,99 @@ var vm = new Vue({
       contentHTML: '',
     },
     version: "loading",
-    mtimeTypeFromNow: false, // or fromNow
+    mtimeTypeFromNow: false,
     auth: {},
     search: getQueryString("search"),
-    files: [{
-      name: "loading ...",
-      path: "",
-      size: "...",
-      type: "dir",
-    }],
+    files: [],
     myDropzone: null,
   },
   computed: {
     computedFiles: function () {
       var that = this;
-      that.preview.filename = null;
-
       var files = this.files.filter(function (f) {
-        if (f.name == 'README.md') {
-          that.preview.filename = f.name;
-        }
         if (!that.showHidden && f.name.slice(0, 1) === '.') {
           return false;
         }
         return true;
       });
-      // console.log(this.previewFile)
-      if (this.preview.filename) {
-        var name = this.preview.filename; // For now only README.md
-        console.log(pathJoin([location.pathname, 'README.md']))
-        $.ajax({
-          url: pathJoin([location.pathname, 'README.md']),
-          method: 'GET',
-          success: function (res) {
-            var converter = new showdown.Converter({
-              // Disable raw HTML passthrough so uploaded README.md cannot inject scripts.
-              noHTML: true,
-              tables: true,
-              omitExtraWLInCodeBlocks: true,
-              parseImgDimensions: true,
-              simplifiedAutoLink: true,
-              literalMidWordUnderscores: true,
-              tasklists: true,
-              ghCodeBlocks: true,
-              smoothLivePreview: true,
-              simplifiedAutoLink: true,
-              strikethrough: true,
-            });
-
-            var html = converter.makeHtml(res);
-            that.preview.contentHTML = html;
-          },
-          error: function (err) {
-            console.log(err)
-          }
-        })
-      }
-
       return files;
     },
   },
+  watch: {
+    files: function (newFiles) {
+      console.log('[DEBUG] 文件列表更新: 数量=' + newFiles.length);
+      this.preview.filename = '';
+      for (var i = 0; i < newFiles.length; i++) {
+        if (newFiles[i].name === 'README.md') {
+          this.preview.filename = newFiles[i].name;
+          this.fetchReadme(newFiles[i].name);
+          break;
+        }
+      }
+    },
+  },
   created: function () {
+    console.log('[DEBUG] Vue实例创建完成, 开始加载用户信息');
     $.ajax({
       url: "/-/user",
       method: "get",
       dataType: "json",
       success: function (ret) {
+        console.log('[DEBUG] 用户信息返回:', ret);
         if (ret) {
           this.user.email = ret.email;
           this.user.name = ret.name;
         }
-      }.bind(this)
-    })
+      }.bind(this),
+      error: function (err) {
+        console.log('[WARN] 用户信息获取失败:', err.status, err.responseText);
+      }
+    });
     this.myDropzone = new Dropzone("#upload-form", {
       paramName: "file",
       maxFilesize: 10240,
       addRemoveLinks: true,
       init: function () {
         this.on("uploadprogress", function (file, progress) {
-          // console.log("File progress", progress);
+          console.log('[DEBUG] 上传进度:', file.name, Math.round(progress) + '%');
         });
         this.on("complete", function (file) {
-          console.log("reload file list")
+          console.log('[DEBUG] 上传完成:', file.name);
           loadFileList()
-        })
+        });
       }
     });
   },
   methods: {
+    fetchReadme: function (filename) {
+      console.log('[DEBUG] 获取README文件内容:', filename);
+      var that = this;
+      $.ajax({
+        url: pathJoin([location.pathname, filename]),
+        method: 'GET',
+        success: function (res) {
+          var converter = new showdown.Converter({
+            noHTML: true,
+            tables: true,
+            omitExtraWLInCodeBlocks: true,
+            parseImgDimensions: true,
+            simplifiedAutoLink: true,
+            literalMidWordUnderscores: true,
+            tasklists: true,
+            ghCodeBlocks: true,
+            smoothLivePreview: true,
+            simplifiedAutoLink: true,
+            strikethrough: true,
+          });
+          var html = converter.makeHtml(res);
+          that.preview.contentHTML = html;
+          console.log('[DEBUG] README渲染完成, 内容长度=' + html.length);
+        },
+        error: function (err) {
+          console.log('[DEBUG] README获取失败(可能不存在):', err.status);
+        }
+      });
+    },
     getEncodePath: function (filepath) {
       return pathJoin([location.pathname].concat(filepath.split("/").map(v => encodeURIComponent(v))))
     },
@@ -154,6 +160,7 @@ var vm = new Vue({
     },
     toggleHidden: function () {
       this.showHidden = !this.showHidden;
+      console.log('[DEBUG] 切换显示隐藏文件:', this.showHidden);
     },
     removeAllUploads: function () {
       this.myDropzone.removeAllFiles();
@@ -239,9 +246,7 @@ var vm = new Vue({
     },
     clickFileOrDir: function (f, e) {
       var reqPath = this.getEncodePath(f.name)
-      // TODO: fix here tomorrow
       if (f.type == "file") {
-        // check whether the file is video
         var videoExtensions = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
         var fileExtension = getExtention(f.name).toLowerCase();
         if (videoExtensions.includes(fileExtension)) {
@@ -260,7 +265,7 @@ var vm = new Vue({
       e.preventDefault()
     },
     showInfo: function (f) {
-      console.log(f);
+      console.log('[DEBUG] 请求文件信息:', f.name);
       $.ajax({
         url: this.getEncodePath(f.name),
         data: {
@@ -268,19 +273,19 @@ var vm = new Vue({
         },
         method: "GET",
         success: function (res) {
+          console.log('[DEBUG] 文件信息返回:', res);
           $("#file-info-title").text(f.name);
           $("#file-info-content").text(JSON.stringify(res, null, 4));
           $("#file-info-modal").modal("show");
-          // console.log(JSON.stringify(res, null, 4));
         },
         error: function (jqXHR, textStatus, errorThrown) {
+          console.log('[ERROR] 文件信息获取失败:', jqXHR.status, jqXHR.responseText);
           showErrorMessage(jqXHR)
         }
       })
     },
     makeDirectory: function () {
       var name = window.prompt("current path: " + location.pathname + "\nplease enter the new directory name", "")
-      console.log(name)
       if (!name) {
         return
       }
@@ -288,32 +293,37 @@ var vm = new Vue({
         alert("Name should not contains any of \\/:*<>|")
         return
       }
+      console.log('[DEBUG] 创建目录:', name, '当前路径:', location.pathname);
       $.ajax({
         url: this.getEncodePath(name),
         method: "POST",
         success: function (res) {
-          console.log(res)
+          console.log('[DEBUG] 目录创建结果:', res);
           loadFileList()
         },
         error: function (jqXHR, textStatus, errorThrown) {
+          console.log('[ERROR] 目录创建失败:', jqXHR.status, jqXHR.responseText);
           showErrorMessage(jqXHR)
         }
       })
     },
     deletePathConfirm: function (f, e) {
       e.preventDefault();
-      if (!e.altKey) { // skip confirm when alt pressed
+      if (!e.altKey) {
         if (!window.confirm("Delete " + f.name + " ?")) {
           return;
         }
       }
+      console.log('[DEBUG] 删除文件/目录:', f.name, '路径:', f.path);
       $.ajax({
         url: this.getEncodePath(f.name),
         method: 'DELETE',
         success: function (res) {
+          console.log('[DEBUG] 删除结果:', res);
           loadFileList()
         },
         error: function (jqXHR, textStatus, errorThrown) {
+          console.log('[ERROR] 删除失败:', jqXHR.status, jqXHR.responseText);
           showErrorMessage(jqXHR)
         }
       });
@@ -324,6 +334,7 @@ var vm = new Vue({
       var parts = pathname.split('/');
       this.breadcrumb = [];
       if (pathname == "/") {
+        console.log('[DEBUG] 根路径, 面包屑为空');
         return this.breadcrumb;
       }
       var i = 2;
@@ -338,16 +349,17 @@ var vm = new Vue({
           path: path
         })
       }
+      console.log('[DEBUG] 面包屑更新:', this.breadcrumb.map(function(b){return b.name}).join(' > '));
       return this.breadcrumb;
     },
     loadPreviewFile: function (filepath, e) {
       if (e) {
-        e.preventDefault() // may be need a switch
+        e.preventDefault()
       }
       var that = this;
       $.getJSON(pathJoin(['/-/info', location.pathname]))
           .then(function (res) {
-            console.log(res);
+            console.log('[DEBUG] 预览文件信息:', res);
             that.preview.filename = res.name;
             that.preview.filesize = res.size;
             return $.ajax({
@@ -356,21 +368,20 @@ var vm = new Vue({
             });
           })
           .then(function (res) {
-            console.log(res)
+            console.log('[DEBUG] 预览文件内容加载完成, 长度=' + res.length);
             that.preview.contentHTML = '<pre>' + res + '</pre>';
-            console.log("Finally")
           })
           .done(function (res) {
-            console.log("done", res)
+            console.log('[DEBUG] 文件预览加载完成');
           });
     },
     loadAll: function () {
-      // TODO: move loadFileList here
     },
   }
 })
 
 window.onpopstate = function (event) {
+  console.log('[DEBUG] 浏览器历史导航触发, 搜索参数:', getQueryString("search"));
   if (location.search.match(/\?search=/)) {
     location.reload();
     return;
@@ -379,6 +390,7 @@ window.onpopstate = function (event) {
 }
 
 function loadFileOrDir(reqPath) {
+  console.log('[DEBUG] 导航到:', reqPath);
   let requestUri = reqPath + location.search
   var retObj = loadFileList(requestUri)
   if (retObj !== null) {
@@ -386,19 +398,21 @@ function loadFileOrDir(reqPath) {
       window.history.pushState({}, "", requestUri);
     });
   }
-
 }
 
 function loadFileList(pathname) {
   var pathname = pathname || location.pathname + location.search;
+  console.log('[DEBUG] loadFileList:', pathname);
   var retObj = null
-  if (getQueryString("raw") !== "false") { // not a file preview
+  if (getQueryString("raw") !== "false") {
+    vm.loading = true;
     var sep = pathname.indexOf("?") === -1 ? "?" : "&"
     retObj = $.ajax({
       url: pathname + sep + "json=true",
       dataType: "json",
       cache: false,
       success: function (res) {
+        console.log('[DEBUG] 文件列表返回: 路径=' + pathname + ' 文件数=' + res.files.length + ' 权限=', res.auth);
         res.files = _.sortBy(res.files, function (f) {
           var weight = f.type == 'dir' ? 1000 : 1;
           return -weight * f.mtime;
@@ -406,12 +420,14 @@ function loadFileList(pathname) {
         vm.files = res.files;
         vm.auth = res.auth;
         vm.updateBreadcrumb(pathname);
+        vm.loading = false;
       },
       error: function (jqXHR, textStatus, errorThrown) {
+        console.log('[ERROR] 文件列表加载失败:', jqXHR.status, jqXHR.responseText);
+        vm.loading = false;
         showErrorMessage(jqXHR)
       },
     });
-
   }
 
   vm.previewMode = getQueryString("raw") == "false";
@@ -436,14 +452,14 @@ Vue.filter('formatBytes', function (value) {
 
 $(function () {
   $.scrollUp({
-    scrollText: '', // text are defined in css
+    scrollText: '',
   });
 
-  // For page first loading
+  console.log('[DEBUG] 页面初始化, 开始加载文件列表:', location.pathname);
   loadFileList(location.pathname + location.search)
 
-  // update version
   $.getJSON("/-/sysinfo", function (res) {
+    console.log('[DEBUG] 系统信息返回:', res);
     vm.version = res.version;
   })
 

@@ -130,6 +130,16 @@
           </tr>
         </thead>
         <tbody>
+          <tr v-if="loading">
+            <td colspan=4 style="text-align:center;color:#999;">
+              <i class="fa fa-spinner fa-spin"></i> 加载中...
+            </td>
+          </tr>
+          <tr v-else-if="computedFiles.length === 0">
+            <td colspan=4 style="text-align:center;color:#999;">
+              <i class="fa fa-folder-open"></i> 无文件
+            </td>
+          </tr>
           <tr v-for="f in computedFiles">
             <td>
               <a v-on:click='clickFileOrDir(f, $event)' href="{{getEncodePath(f.name)}}">
