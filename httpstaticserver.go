@@ -894,8 +894,8 @@ func (s *HTTPStaticServer) readAccessConf(realPath string) (ac AccessConf) {
 	if err != nil {
 		warnLog("解析.ghs.yml出错: %s 错误=%v", s.absPath(cfgFile), err)
 	} else {
-		debugLog(".ghs.yml解析成功: 上传=%v 删除=%v 上传模式=%v 删除模式=%v 允许=%v 拒绝=%v",
-			ac.Upload, ac.Delete, ac.UploadMode, ac.DeleteMode, ac.Allow, ac.Deny)
+		debugLog(".ghs.yml解析成功: 上传=%v 删除=%v 用户数=%d 访问规则数=%d",
+			ac.Upload, ac.Delete, len(ac.Users), len(ac.AccessTables))
 	}
 	return
 }
