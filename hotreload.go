@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-yaml/yaml"
@@ -13,12 +15,28 @@ const (
 	configFileName    = "config.yaml"
 )
 
-type atomicLevelHandler struct {
-	slog.Handler
-	level *slog.AtomicLevel
+type atomicLevel int32
+
+func newAtomicLevel(l slog.Level) *atomicLevel {
+	al := new(atomicLevel)
+	al.Set(l)
+	return al
 }
 
-func (h *atomicLevelHandler) Enabled(r slog.Level) bool {
+func (al *atomicLevel) Set(l slog.Level) {
+	atomic.StoreInt32((*int32)(al), int32(l))
+}
+
+func (al *atomicLevel) Level() slog.Level {
+	return slog.Level(atomic.LoadInt32((*int32)(al)))
+}
+
+type atomicLevelHandler struct {
+	slog.Handler
+	level *atomicLevel
+}
+
+func (h *atomicLevelHandler) Enabled(_ context.Context, r slog.Level) bool {
 	return r >= h.level.Level()
 }
 
@@ -32,7 +50,7 @@ func (h *atomicLevelHandler) WithGroup(name string) slog.Handler {
 
 var (
 	slogLevel   = slog.LevelInfo
-	levelHolder *slog.AtomicLevel
+	levelHolder *atomicLevel
 	configMTime time.Time
 )
 
@@ -81,7 +99,7 @@ func reloadConfig() bool {
 		} else {
 			slogLevel = slog.LevelInfo
 		}
-		levelHolder.SetLevel(slogLevel)
+		levelHolder.Set(slogLevel)
 		infoLog("热加载: 日志级别切换为 %v", slogLevel)
 	}
 

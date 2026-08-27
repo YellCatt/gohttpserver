@@ -68,7 +68,7 @@ func (l httpLogger) Log(record accesslog.LogRecord) {
 }
 
 func debugLog(format string, args ...interface{}) {
-	if levelHolder != nil && levelHolder.Enabled(slog.LevelDebug) {
+	if levelHolder != nil && levelHolder.Level() <= slog.LevelDebug {
 		slogLogger.Debug(fmt.Sprintf(format, args...))
 	}
 }
@@ -100,17 +100,16 @@ var (
 )
 
 func init() {
-	levelHolder = new(slog.AtomicLevel)
-	levelHolder.SetLevel(slog.LevelInfo)
+	levelHolder = newAtomicLevel(slog.LevelInfo)
 	slogLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
 func initLogger() {
 	if gcfg.Debug {
-		levelHolder.SetLevel(slog.LevelDebug)
+		levelHolder.Set(slog.LevelDebug)
 		slogLevel = slog.LevelDebug
 	} else {
-		levelHolder.SetLevel(slog.LevelInfo)
+		levelHolder.Set(slog.LevelInfo)
 		slogLevel = slog.LevelInfo
 	}
 
