@@ -10,7 +10,6 @@ import (
 	"io"
 	"io/ioutil"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -357,7 +356,6 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	var filenameOverride string
 	var unzipFlag bool
 	var fileTempPath string
-	var fileWritten int64
 	partCount := 0
 	hasFile := false
 
