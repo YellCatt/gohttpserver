@@ -35,19 +35,22 @@ func sanitizedName(filename string) string {
 func statFile(filename string) (info os.FileInfo, reader io.ReadCloser, err error) {
 	info, err = os.Lstat(filename)
 	if err != nil {
+		debugLog("statFile失败: %s 错误=%v", filename, err)
 		return
 	}
-	// content
 	if info.Mode()&os.ModeSymlink != 0 {
 		var target string
 		target, err = os.Readlink(filename)
 		if err != nil {
+			debugLog("读取符号链接失败: %s 错误=%v", filename, err)
 			return
 		}
 		reader = ioutil.NopCloser(bytes.NewBuffer([]byte(target)))
+		debugLog("statFile: 符号链接 %s -> %s", filename, target)
 	} else if !info.IsDir() {
 		reader, err = os.Open(filename)
 		if err != nil {
+			debugLog("打开文件失败: %s 错误=%v", filename, err)
 			return
 		}
 	} else {

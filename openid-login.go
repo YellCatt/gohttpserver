@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	openid "github.com/codeskyblue/openid-go"
+	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 )
 
@@ -32,8 +33,8 @@ func init() {
 	gob.Register(&M{})
 }
 
-func handleOpenID(loginUrl string, secure bool) {
-	http.HandleFunc("/-/login", func(w http.ResponseWriter, r *http.Request) {
+func handleOpenID(loginUrl string, secure bool, router *mux.Router) {
+	router.HandleFunc("/-/login", func(w http.ResponseWriter, r *http.Request) {
 		nextUrl := r.FormValue("next")
 		referer := r.Referer()
 		if nextUrl == "" && strings.Contains(referer, "://"+r.Host) {
@@ -43,7 +44,7 @@ func handleOpenID(loginUrl string, secure bool) {
 		if r.URL.Scheme != "" {
 			scheme = r.URL.Scheme
 		}
-	debugLog("OpenID登录请求: 协议=%s 主机=%s 回调地址=%s", scheme, r.Host, nextUrl)
+		debugLog("OpenID登录请求: 协议=%s 主机=%s 回调地址=%s", scheme, r.Host, nextUrl)
 		if url, err := openid.RedirectURL(loginUrl,
 			scheme+"://"+r.Host+"/-/openidcallback?next="+nextUrl, ""); err == nil {
 			http.Redirect(w, r, url, 303)
@@ -52,7 +53,7 @@ func handleOpenID(loginUrl string, secure bool) {
 		}
 	})
 
-	http.HandleFunc("/-/openidcallback", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/-/openidcallback", func(w http.ResponseWriter, r *http.Request) {
 		id, err := openid.Verify("http://"+r.Host+r.URL.String(), discoveryCache, nonceStore)
 		if err != nil {
 			errorLog("OpenID验证失败: %v", err)
@@ -85,7 +86,7 @@ func handleOpenID(loginUrl string, secure bool) {
 		http.Redirect(w, r, nextUrl, 302)
 	})
 
-	http.HandleFunc("/-/user", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/-/user", func(w http.ResponseWriter, r *http.Request) {
 		session, err := store.Get(r, defaultSessionName)
 		if err != nil {
 			errorLog("获取用户会话失败: %v", err)
@@ -99,7 +100,7 @@ func handleOpenID(loginUrl string, secure bool) {
 		w.Write(data)
 	})
 
-	http.HandleFunc("/-/logout", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/-/logout", func(w http.ResponseWriter, r *http.Request) {
 		session, err := store.Get(r, defaultSessionName)
 		if err != nil {
 			errorLog("获取登出会话失败: %v", err)

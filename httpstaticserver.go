@@ -88,6 +88,8 @@ func NewHTTPStaticServer(root string, noIndex bool) *HTTPStaticServer {
 		NoIndex: noIndex,
 	}
 
+	debugLog("HTTP静态服务器初始化: 根目录=%s 索引构建=%v", root, !noIndex)
+
 	if !noIndex {
 		go func() {
 			time.Sleep(1 * time.Second)
@@ -101,41 +103,52 @@ func NewHTTPStaticServer(root string, noIndex bool) *HTTPStaticServer {
 		}()
 	}
 
-	// routers for Apple *.ipa
 	m.HandleFunc("/-/ipa/plist/{path:.*}", s.hPlist)
 	m.HandleFunc("/-/ipa/link/{path:.*}", s.hIpaLink)
 	m.HandleFunc("/-/video-player/{path:.*}", s.hVideoPlayer)
+	debugLog("已注册特殊路由: /-/ipa/plist /-/ipa/link /-/video-player")
 
 	m.HandleFunc("/{path:.*}", s.hIndex).Methods("GET", "HEAD")
 	m.HandleFunc("/{path:.*}", s.hUploadOrMkdir).Methods("POST")
 	m.HandleFunc("/{path:.*}", s.hDelete).Methods("DELETE")
+	debugLog("已注册通配路由: GET/HEAD->hIndex POST->hUploadOrMkdir DELETE->hDelete")
 	return s
 }
 
 func (s *HTTPStaticServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Defense-in-depth for uploaded content and README previews.
 	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+	debugLog("收到请求: 方法=%s URL=%s 远程地址=%s", r.Method, r.URL.String(), r.RemoteAddr)
+	defer func() {
+		if rec := recover(); rec != nil {
+			errorLog("请求处理panic: 方法=%s URL=%s 错误=%v", r.Method, r.URL.String(), rec)
+		}
+	}()
 	s.m.ServeHTTP(w, r)
 }
 
 // Return real path with Seperator(/)
 func (s *HTTPStaticServer) getRealPath(r *http.Request) string {
 	path := mux.Vars(r)["path"]
+	debugLog("getRealPath: 原始path变量=%s", path)
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	path = filepath.Clean(path) // prevent .. for safe issues
+	path = filepath.Clean(path)
 	relativePath, err := filepath.Rel(s.Prefix, path)
 	if err != nil {
+		warnLog("getRealPath Rel计算失败: prefix=%s path=%s 错误=%v", s.Prefix, path, err)
 		relativePath = path
 	}
 	realPath := filepath.Join(s.Root, relativePath)
-	return filepath.ToSlash(realPath)
+	realPath = filepath.ToSlash(realPath)
+	debugLog("getRealPath: prefix=%s cleanedPath=%s relativePath=%s realPath=%s", s.Prefix, path, relativePath, realPath)
+	return realPath
 }
 
 func (s *HTTPStaticServer) absPath(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
+		warnLog("绝对路径转换失败: 原始=%s 错误=%v", p, err)
 		return p
 	}
 	return filepath.ToSlash(abs)
@@ -144,47 +157,64 @@ func (s *HTTPStaticServer) absPath(p string) string {
 func (s *HTTPStaticServer) hIndex(w http.ResponseWriter, r *http.Request) {
 	path := mux.Vars(r)["path"]
 	realPath := s.getRealPath(r)
+	absPath := s.absPath(realPath)
+
 	if r.FormValue("json") == "true" {
-		debugLog("列出目录: uri=%s 绝对路径=%s", path, s.absPath(realPath))
+		debugLog("列出目录JSON: uri=%s 绝对路径=%s", path, absPath)
 		s.hJSONList(w, r)
 		return
 	}
 
 	if r.FormValue("op") == "info" {
-		debugLog("查询文件信息: uri=%s 绝对路径=%s", path, s.absPath(realPath))
+		debugLog("查询文件信息: uri=%s 绝对路径=%s", path, absPath)
 		s.hInfo(w, r)
 		return
 	}
 
 	if r.FormValue("op") == "archive" {
-		debugLog("打包下载: uri=%s 绝对路径=%s", path, s.absPath(realPath))
+		debugLog("打包下载: uri=%s 绝对路径=%s", path, absPath)
 		s.hZip(w, r)
 		return
 	}
 
-	debugLog("请求: 方法=%s URI=%s 绝对路径=%s 是否目录=%v", r.Method, path, s.absPath(realPath), isDir(realPath))
-	if r.FormValue("raw") == "false" || isDir(realPath) {
-		if r.Method == "HEAD" {
-			debugLog("HEAD请求，直接返回")
+	dir := isDir(realPath)
+	fi, statErr := os.Stat(realPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			warnLog("路径不存在: uri=%s 绝对路径=%s 错误=%v", path, absPath, statErr)
+			http.Error(w, "路径不存在", http.StatusNotFound)
 			return
 		}
-		debugLog("返回目录列表页面")
+		errorLog("路径状态检查失败: uri=%s 绝对路径=%s 错误=%v", path, absPath, statErr)
+		http.Error(w, statErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	debugLog("请求详情: 方法=%s URI=%s 绝对路径=%s 是否目录=%v 文件大小=%d 文件名=%s 修改时间=%s",
+		r.Method, path, absPath, dir, fi.Size(), fi.Name(), fi.ModTime().Format("2006-01-02 15:04:05"))
+
+	if r.FormValue("raw") == "false" || dir {
+		if r.Method == "HEAD" {
+			debugLog("HEAD请求，直接返回: %s", absPath)
+			return
+		}
+		debugLog("返回目录列表页面: %s", absPath)
 		renderHTML(w, "assets/index.html", s)
 	} else {
 		if filepath.Base(path) == YAMLCONF {
 			debugLog("检测到访问.ghs.yml配置文件，进行权限检查")
 			auth := s.readAccessConf(realPath)
 			if !auth.Delete {
-				warnLog("尝试访问受限配置文件被拒绝: %s", s.absPath(realPath))
+				warnLog("尝试访问受限配置文件被拒绝: %s", absPath)
 				http.Error(w, "安全警告，禁止读取此文件", http.StatusForbidden)
 				return
 			}
 		}
 		if r.FormValue("download") == "true" {
-			debugLog("下载文件: %s", s.absPath(realPath))
+			debugLog("下载文件: %s 大小=%d", absPath, fi.Size())
 			w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(path)))
 		} else {
-			debugLog("返回文件内容: %s", s.absPath(realPath))
+			debugLog("返回文件内容: %s 大小=%d MIME类型=%s", absPath, fi.Size(), mime.TypeByExtension(filepath.Ext(path)))
 		}
 		http.ServeFile(w, r, realPath)
 	}
@@ -194,15 +224,33 @@ func (s *HTTPStaticServer) hDelete(w http.ResponseWriter, req *http.Request) {
 	path := mux.Vars(req)["path"]
 	realPath := s.getRealPath(req)
 	absPath := s.absPath(realPath)
+	debugLog("删除请求: uri=%s 绝对路径=%s", path, absPath)
+
+	fi, err := os.Stat(realPath)
+	if err != nil {
+		errorLog("删除前检查失败: uri=%s 绝对路径=%s 错误=%v", path, absPath, err)
+		if os.IsNotExist(err) {
+			http.Error(w, "路径不存在", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	if fi.IsDir() {
+		debugLog("删除目录: %s 文件数约为=%d", absPath, countDirFiles(realPath))
+	} else {
+		debugLog("删除文件: %s 大小=%d", absPath, fi.Size())
+	}
+
 	auth := s.readAccessConf(realPath)
 	if !auth.canDelete(req) {
-		warnLog("删除被拒绝: uri=%s 绝对路径=%s", path, absPath)
+		warnLog("删除被拒绝(权限不足): uri=%s 绝对路径=%s", path, absPath)
 		http.Error(w, "禁止删除", http.StatusForbidden)
 		return
 	}
 
 	infoLog("开始删除: uri=%s 绝对路径=%s", path, absPath)
-	err := os.RemoveAll(realPath)
+	err = os.RemoveAll(realPath)
 	if err != nil {
 		errorLog("删除失败: uri=%s 绝对路径=%s 错误=%v", path, absPath, err)
 		pathErr, ok := err.(*os.PathError)
@@ -217,23 +265,38 @@ func (s *HTTPStaticServer) hDelete(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("删除成功"))
 }
 
+func countDirFiles(dir string) int {
+	count := 0
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		count++
+		return nil
+	})
+	return count
+}
+
 func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Request) {
 	dirpath := s.getRealPath(req)
 	absDirpath := s.absPath(dirpath)
-	debugLog("上传/建目录请求: 方法=%s 目录=%s 绝对路径=%s", req.Method, dirpath, absDirpath)
+	debugLog("上传/建目录请求: 方法=%s 目录=%s 绝对路径=%s 内容类型=%s", req.Method, dirpath, absDirpath, req.Header.Get("Content-Type"))
 
 	auth := s.readAccessConf(dirpath)
 	if !auth.canUpload(req) {
-		warnLog("上传被拒绝: 绝对路径=%s", absDirpath)
+		warnLog("上传被拒绝(权限不足): 绝对路径=%s", absDirpath)
 		http.Error(w, "禁止上传", http.StatusForbidden)
 		return
 	}
+
+	debugLog("权限检查通过: 上传权限=%v 删除权限=%v", auth.Upload, auth.Delete)
 
 	file, header, err := req.FormFile("file")
 
 	dirExisted := true
 	if _, err := os.Stat(dirpath); os.IsNotExist(err) {
 		dirExisted = false
+		debugLog("目录不存在，准备创建: %s", absDirpath)
 		if err := os.MkdirAll(dirpath, os.ModePerm); err != nil {
 			errorLog("创建目录失败: 绝对路径=%s 错误=%v", absDirpath, err)
 			http.Error(w, "目录创建失败: "+err.Error(), http.StatusInternalServerError)
@@ -246,6 +309,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		if dirExisted {
 			infoLog("目录已存在，无需创建: 绝对路径=%s", absDirpath)
 		}
+		debugLog("仅创建目录请求，无文件上传")
 		w.Header().Set("Content-Type", "application/json;charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":     true,
@@ -268,6 +332,8 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	if filename == "" {
 		filename = header.Filename
 	}
+	debugLog("上传文件信息: 原始文件名=%s 目标文件名=%s 大小=%d", header.Filename, filename, header.Size)
+
 	if err := checkFilename(filename); err != nil {
 		errorLog("文件名不合法: %s 错误=%v", filename, err)
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -295,15 +361,15 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 
 	buf := s.bufPool.Get().([]byte)
 	defer s.bufPool.Put(buf)
-	_, copyErr = io.CopyBuffer(dst, file, buf)
+	written, copyErr := io.CopyBuffer(dst, file, buf)
 	dst.Close()
 	if copyErr != nil {
-		errorLog("写入文件失败: 绝对路径=%s 错误=%v", absDstPath, copyErr)
+		errorLog("写入文件失败: 绝对路径=%s 已写入=%d 错误=%v", absDstPath, written, copyErr)
 		http.Error(w, copyErr.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	infoLog("文件操作完成: 文件名=%s 大小=%d 绝对路径=%s", filename, header.Size, absDstPath)
+	infoLog("文件操作完成: 文件名=%s 大小=%d 绝对路径=%s", filename, written, absDstPath)
 
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 
@@ -325,6 +391,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
+	debugLog("上传完成，返回成功响应: 目标=%s", dstPath)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":     true,
 		"destination": dstPath,
@@ -384,13 +451,14 @@ func (s *HTTPStaticServer) hInfo(w http.ResponseWriter, r *http.Request) {
 		fji.Type = "markdown"
 	case ".apk":
 		fji.Type = "apk"
+		debugLog("解析APK信息: %s", absPath)
 		fji.Extra = parseApkInfo(relPath)
 	case "":
 		fji.Type = "dir"
 	default:
 		fji.Type = "text"
 	}
-	debugLog("返回文件信息: %s 类型=%s 大小=%d", absPath, fji.Type, fi.Size())
+	debugLog("返回文件信息: %s 类型=%s 大小=%d 修改时间=%s", absPath, fji.Type, fi.Size(), fi.ModTime().Format("2006-01-02 15:04:05"))
 	data, _ := json.Marshal(fji)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -565,12 +633,15 @@ func (c *AccessConf) canAccess(fileName string) bool {
 		if !ok {
 			pattern, _ = regexp.Compile(table.Regex)
 			reCache[table.Regex] = pattern
+			if pattern != nil {
+				debugLog("编译访问控制正则: %s 允许=%v", table.Regex, table.Allow)
+			}
 		}
-		// skip wrong format regex
 		if pattern == nil {
 			continue
 		}
 		if pattern.MatchString(fileName) {
+			debugLog("文件名%s匹配访问规则: regex=%s allow=%v", fileName, table.Regex, table.Allow)
 			return table.Allow
 		}
 	}
@@ -633,6 +704,7 @@ func (s *HTTPStaticServer) hJSONList(w http.ResponseWriter, r *http.Request) {
 	search := r.FormValue("search")
 	absPath := s.absPath(realPath)
 	debugLog("列出目录JSON: 请求路径=%s 绝对路径=%s 搜索关键词=%s", requestPath, absPath, search)
+
 	auth := s.readAccessConf(realPath)
 	auth.Upload = auth.canUpload(r)
 	auth.Delete = auth.canDelete(r)
@@ -646,7 +718,7 @@ func (s *HTTPStaticServer) hJSONList(w http.ResponseWriter, r *http.Request) {
 		if len(results) > 50 {
 			results = results[:50]
 		}
-		debugLog("搜索索引匹配: 关键词=%s 结果数=%d", search, len(results))
+		debugLog("搜索索引匹配: 关键词=%s 结果数=%d (限制50)", search, len(results))
 		for _, item := range results {
 			if filepath.HasPrefix(item.Path, requestPath) {
 				fileInfoMap[item.Path] = item.Info
@@ -659,15 +731,19 @@ func (s *HTTPStaticServer) hJSONList(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		debugLog("读取目录: 绝对路径=%s 直接子项数=%d", absPath, len(infos))
 		for _, info := range infos {
-			fileInfoMap[filepath.Join(requestPath, info.Name())] = info
+			childPath := filepath.Join(requestPath, info.Name())
+			fileInfoMap[childPath] = info
 		}
 	}
 
 	lrs := make([]HTTPFileInfo, 0)
+	skippedCount := 0
 	for path, info := range fileInfoMap {
 		if !auth.canAccess(info.Name()) {
 			debugLog("文件被访问控制规则跳过: %s", info.Name())
+			skippedCount++
 			continue
 		}
 		lr := HTTPFileInfo{
@@ -695,7 +771,7 @@ func (s *HTTPStaticServer) hJSONList(w http.ResponseWriter, r *http.Request) {
 		lrs = append(lrs, lr)
 	}
 
-	debugLog("目录列表返回: 路径=%s 文件数=%d", absPath, len(lrs))
+	debugLog("目录列表返回: 路径=%s 文件数=%d 跳过数=%d", absPath, len(lrs), skippedCount)
 	data, _ := json.Marshal(map[string]interface{}{
 		"files": lrs,
 		"auth":  auth,
@@ -708,9 +784,12 @@ var dirInfoSize = Directory{size: make(map[string]int64), mutex: &sync.RWMutex{}
 
 func (s *HTTPStaticServer) makeIndex() error {
 	var indexes = make([]IndexFileItem, 0)
-	var err = filepath.Walk(s.Root, func(path string, info os.FileInfo, err error) error {
+	startTime := time.Now()
+	var errCount int
+	err := filepath.Walk(s.Root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			warnLog("遍历路径出错: %s 错误=%v", strconv.Quote(path), err)
+			errCount++
 			return filepath.SkipDir
 		}
 		if info.IsDir() {
@@ -723,7 +802,7 @@ func (s *HTTPStaticServer) makeIndex() error {
 		return nil
 	})
 	s.indexes = indexes
-	debugLog("搜索索引构建完成: 文件数=%d", len(indexes))
+	debugLog("搜索索引构建完成: 文件数=%d 遍历错误数=%d 耗时=%v", len(indexes), errCount, time.Since(startTime))
 	return err
 }
 
@@ -783,46 +862,61 @@ func (s *HTTPStaticServer) defaultAccessConf() AccessConf {
 }
 
 func (s *HTTPStaticServer) readAccessConf(realPath string) (ac AccessConf) {
-	debugLog("读取访问控制配置: 绝对路径=%s", s.absPath(realPath))
+	absPath := s.absPath(realPath)
+	debugLog("读取访问控制配置: 绝对路径=%s", absPath)
 	relativePath, err := filepath.Rel(s.Root, realPath)
 	if err != nil || relativePath == "." || relativePath == "" {
+		debugLog("路径在根目录或计算失败，使用默认配置: realPath=%s root=%s err=%v", realPath, s.Root, err)
 		ac = s.defaultAccessConf()
+		debugLog("默认权限: 上传=%v 删除=%v", ac.Upload, ac.Delete)
 		realPath = s.Root
 	} else {
 		parentPath := filepath.Dir(realPath)
+		debugLog("递归读取父目录配置: 当前=%s 父目录=%s", realPath, parentPath)
 		ac = s.readAccessConf(parentPath)
 	}
 	if isFile(realPath) {
+		debugLog("当前路径是文件，取其所在目录: %s", filepath.Dir(realPath))
 		realPath = filepath.Dir(realPath)
 	}
 	cfgFile := filepath.Join(realPath, YAMLCONF)
 	data, err := ioutil.ReadFile(cfgFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			debugLog(".ghs.yml不存在，使用上级配置: %s", s.absPath(cfgFile))
+			debugLog(".ghs.yml不存在: %s，沿用上级配置(上传=%v 删除=%v)", s.absPath(cfgFile), ac.Upload, ac.Delete)
 			return
 		}
 		warnLog("读取.ghs.yml出错: %s 错误=%v", s.absPath(cfgFile), err)
 	} else {
-		debugLog("读取到.ghs.yml配置: %s 大小=%d字节", s.absPath(cfgFile), len(data))
+		debugLog("读取到.ghs.yml配置: %s 大小=%d字节 内容=%s", s.absPath(cfgFile), len(data), string(data))
 	}
 	err = yaml.Unmarshal(data, &ac)
 	if err != nil {
 		warnLog("解析.ghs.yml出错: %s 错误=%v", s.absPath(cfgFile), err)
+	} else {
+		debugLog(".ghs.yml解析成功: 上传=%v 删除=%v 上传模式=%v 删除模式=%v 允许=%v 拒绝=%v",
+			ac.Upload, ac.Delete, ac.UploadMode, ac.DeleteMode, ac.Allow, ac.Deny)
 	}
 	return
 }
 
 func deepPath(basedir, name string, maxDepth int) string {
-	// loop max 5, incase of for loop not finished
 	for depth := 0; depth <= maxDepth; depth += 1 {
 		finfos, err := ioutil.ReadDir(filepath.Join(basedir, name))
-		if err != nil || len(finfos) != 1 {
+		if err != nil {
+			debugLog("deepPath读取目录失败: basedir=%s name=%s 深度=%d 错误=%v", basedir, name, depth, err)
+			break
+		}
+		if len(finfos) != 1 {
+			debugLog("deepPath终止: 目录%s下有%d个子项(深度=%d)", filepath.Join(basedir, name), len(finfos), depth)
 			break
 		}
 		if finfos[0].IsDir() {
+			oldName := name
 			name = filepath.ToSlash(filepath.Join(name, finfos[0].Name()))
+			debugLog("deepPath继续深入: %s -> %s (深度=%d)", oldName, name, depth+1)
 		} else {
+			debugLog("deepPath终止: 唯一子项为文件 %s (深度=%d)", finfos[0].Name(), depth)
 			break
 		}
 	}
@@ -832,12 +926,15 @@ func deepPath(basedir, name string, maxDepth int) string {
 func assetsContent(name string) string {
 	fd, err := Assets.Open(name)
 	if err != nil {
+		errorLog("打开资源文件失败: %s 错误=%v", name, err)
 		panic(err)
 	}
 	data, err := ioutil.ReadAll(fd)
 	if err != nil {
+		errorLog("读取资源文件失败: %s 错误=%v", name, err)
 		panic(err)
 	}
+	debugLog("加载资源文件: %s 大小=%d字节", name, len(data))
 	return string(data)
 }
 
@@ -869,12 +966,19 @@ var (
 
 func renderHTML(w http.ResponseWriter, name string, v interface{}) {
 	if t, ok := _tmpls[name]; ok {
+		debugLog("使用缓存模板: %s", name)
 		t.Execute(w, v)
 		return
 	}
+	debugLog("加载并解析模板: %s", name)
 	t := template.Must(template.New(name).Funcs(funcMap).Delims("[[", "]]").Parse(assetsContent(name)))
 	_tmpls[name] = t
-	t.Execute(w, v)
+	if err := t.Execute(w, v); err != nil {
+		errorLog("模板执行失败: %s 错误=%v", name, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	debugLog("模板渲染完成: %s", name)
 }
 
 func checkFilename(name string) error {

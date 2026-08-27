@@ -329,10 +329,8 @@ func main() {
 			debugLog("未配置HTTP认证用户")
 		}
 	case "openid":
-		handleOpenID(gcfg.Auth.OpenID, false)
 		infoLog("OpenID认证已启用: %s", gcfg.Auth.OpenID)
 	case "oauth2-proxy":
-		handleOauth2()
 		infoLog("OAuth2代理认证已启用")
 	default:
 		infoLog("未启用认证 (auth-type=%s)", gcfg.Auth.Type)
@@ -353,10 +351,13 @@ func main() {
 		mainRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, gcfg.Prefix, http.StatusTemporaryRedirect)
 		})
-		debugLog("路由前缀已配置: %s", gcfg.Prefix)
+		debugLog("路由前缀已配置: %s 子路由器创建完成", gcfg.Prefix)
 	}
 
+	debugLog("注册静态资源路由: /-/assets/")
 	router.PathPrefix("/-/assets/").Handler(http.StripPrefix(gcfg.Prefix+"/-/", http.FileServer(Assets)))
+
+	debugLog("注册系统信息路由: /-/sysinfo")
 	router.HandleFunc("/-/sysinfo", func(w http.ResponseWriter, r *http.Request) {
 		data, _ := json.Marshal(map[string]interface{}{
 			"version": VERSION,
@@ -365,7 +366,19 @@ func main() {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 		w.Write(data)
 	})
+
+	switch gcfg.Auth.Type {
+	case "openid":
+		debugLog("注册OpenID认证路由: /-/login /-/user /-/logout /-/openidcallback")
+		handleOpenID(gcfg.Auth.OpenID, false, router)
+	case "oauth2-proxy":
+		debugLog("注册OAuth2代理路由: /-/user")
+		handleOauth2(router)
+	}
+
+	debugLog("注册通配路由(必须最后): / -> hdlr (GET/POST/DELETE)")
 	router.PathPrefix("/").Handler(hdlr)
+	debugLog("路由注册完成")
 
 	if gcfg.Addr == "" {
 		gcfg.Addr = fmt.Sprintf(":%d", gcfg.Port)
