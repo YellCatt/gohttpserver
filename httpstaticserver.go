@@ -353,11 +353,13 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	var filePart *multipart.Part
 	var fileFallbackName string
 	var filenameOverride string
 	var unzipFlag bool
+	var fileTempPath string
+	var fileWritten int64
 	partCount := 0
+	hasFile := false
 
 	for {
 		part, err := reader.NextPart()
@@ -376,8 +378,27 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		switch part.FormName() {
 		case "file":
 			fileFallbackName = part.FileName()
-			filePart = part
+			hasFile = true
 			debugLog("找到文件part: 原始文件名=%s", fileFallbackName)
+			tmpFile, tmpErr := os.CreateTemp("", "gohttpserver-upload-*")
+			if tmpErr != nil {
+				errorLog("创建临时文件失败: %v", tmpErr)
+				http.Error(w, tmpErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			fileTempPath = tmpFile.Name()
+			tmpBuf := s.bufPool.Get().([]byte)
+			fileWritten, copyErr := s.copyWithProgress(tmpFile, part, tmpBuf, fileFallbackName)
+			s.bufPool.Put(tmpBuf)
+			tmpFile.Close()
+			if copyErr != nil {
+				errorLog("写入临时文件失败: %v", copyErr)
+				os.Remove(fileTempPath)
+				http.Error(w, copyErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			debugLog("文件数据已保存到临时文件: %s 大小=%d (%.2f MB)",
+				fileTempPath, fileWritten, float64(fileWritten)/1024/1024)
 		case "filename":
 			buf, _ := io.ReadAll(part)
 			filenameOverride = string(buf)
@@ -394,7 +415,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		}
 	}
 
-	if filePart == nil {
+	if !hasFile {
 		debugLog("仅创建目录请求，无文件上传: %s", absDirpath)
 		w.Header().Set("Content-Type", "application/json;charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -403,7 +424,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		})
 		return
 	}
-	defer filePart.Close()
+	defer os.Remove(fileTempPath)
 
 	filename := filenameOverride
 	if filename == "" {
@@ -441,10 +462,18 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	debugLog("开始写入前内存: HeapAlloc=%d (%.2f MB) GC次数=%d",
 		memStats2.HeapAlloc, float64(memStats2.HeapAlloc)/1024/1024, memStats2.NumGC)
 
+	tmpSrc, err := os.Open(fileTempPath)
+	if err != nil {
+		errorLog("打开临时文件失败: %s 错误=%v", fileTempPath, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tmpSrc.Close()
+
 	buf := s.bufPool.Get().([]byte)
 	debugLog("获取写入缓冲区: 大小=%d bytes", len(buf))
 
-	written, copyErr := s.copyWithProgress(dst, filePart, buf, filename)
+	written, copyErr := s.copyWithProgress(dst, tmpSrc, buf, filename)
 
 	s.bufPool.Put(buf)
 
