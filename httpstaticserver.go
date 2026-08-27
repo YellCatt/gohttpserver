@@ -27,7 +27,7 @@ import (
 
 const YAMLCONF = ".ghs.yml"
 
-const contentSecurityPolicy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+const contentSecurityPolicy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
 
 type ApkInfo struct {
 	PackageName  string `json:"packageName"`
@@ -134,11 +134,19 @@ func (s *HTTPStaticServer) getRealPath(r *http.Request) string {
 		path = "/" + path
 	}
 	path = filepath.Clean(path)
-	relativePath, err := filepath.Rel(s.Prefix, path)
-	if err != nil {
-		warnLog("getRealPath Rel计算失败: prefix=%s path=%s 错误=%v", s.Prefix, path, err)
+
+	var relativePath string
+	if s.Prefix == "" {
 		relativePath = path
+	} else {
+		var err error
+		relativePath, err = filepath.Rel(s.Prefix, path)
+		if err != nil {
+			warnLog("getRealPath Rel计算失败: prefix=%s path=%s 错误=%v", s.Prefix, path, err)
+			relativePath = path
+		}
 	}
+
 	realPath := filepath.Join(s.Root, relativePath)
 	realPath = filepath.ToSlash(realPath)
 	debugLog("getRealPath: prefix=%s cleanedPath=%s relativePath=%s realPath=%s", s.Prefix, path, relativePath, realPath)
@@ -947,7 +955,7 @@ func init() {
 	funcMap = template.FuncMap{
 		"title": strings.Title,
 		"urlhash": func(path string) string {
-			httpFile, err := Assets.Open(path)
+			httpFile, err := Assets.Open("assets/" + path)
 			if err != nil {
 				return path + "#no-such-file"
 			}

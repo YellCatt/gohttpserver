@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -368,6 +369,9 @@ func main() {
 	})
 
 	switch gcfg.Auth.Type {
+	case "http":
+		debugLog("注册HTTP Basic Auth路由: /-/user")
+		router.HandleFunc("/-/user", handleBasicAuthUser)
 	case "openid":
 		debugLog("注册OpenID认证路由: /-/login /-/user /-/logout /-/openidcallback")
 		handleOpenID(gcfg.Auth.OpenID, false, router)
@@ -428,4 +432,23 @@ func main() {
 		errorLog("服务启动失败: %v", err)
 		log.Fatal(err)
 	}
+}
+
+func handleBasicAuthUser(w http.ResponseWriter, r *http.Request) {
+	user := &UserInfo{}
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Basic ") {
+		payload, err := base64.StdEncoding.DecodeString(auth[6:])
+		if err == nil {
+			parts := strings.SplitN(string(payload), ":", 2)
+			if len(parts) == 2 {
+				user.Id = parts[0]
+				user.Name = parts[0]
+				user.Email = parts[0]
+				user.NickName = parts[0]
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	data, _ := json.Marshal(user)
+	w.Write(data)
 }
