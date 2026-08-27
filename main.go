@@ -68,7 +68,7 @@ func (l httpLogger) Log(record accesslog.LogRecord) {
 }
 
 func debugLog(format string, args ...interface{}) {
-	if gcfg.Debug {
+	if levelHolder != nil && levelHolder.Enabled(slog.LevelDebug) {
 		slogLogger.Debug(fmt.Sprintf(format, args...))
 	}
 }
@@ -91,6 +91,7 @@ var (
 	gcfg              = Configure{}
 	logger            = httpLogger{}
 	slogLogger        *slog.Logger
+	ss                *HTTPStaticServer
 
 	VERSION   = "v1.0.0_20260827_1553"
 	BUILDTIME = "unknown time"
@@ -99,16 +100,18 @@ var (
 )
 
 func init() {
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	})
-	slogLogger = slog.New(handler)
+	levelHolder = new(slog.AtomicLevel)
+	levelHolder.SetLevel(slog.LevelInfo)
+	slogLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
 func initLogger() {
-	level := slog.LevelInfo
 	if gcfg.Debug {
-		level = slog.LevelDebug
+		levelHolder.SetLevel(slog.LevelDebug)
+		slogLevel = slog.LevelDebug
+	} else {
+		levelHolder.SetLevel(slog.LevelInfo)
+		slogLevel = slog.LevelInfo
 	}
 
 	var writers []io.Writer
@@ -125,14 +128,17 @@ func initLogger() {
 
 	w := io.MultiWriter(writers...)
 
-	var handler slog.Handler
+	var innerHandler slog.Handler
 	if gcfg.LogFormat == "json" {
-		handler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
+		innerHandler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})
 	} else {
-		handler = slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
+		innerHandler = slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})
 	}
 
-	slogLogger = slog.New(handler)
+	slogLogger = slog.New(&atomicLevelHandler{
+		Handler: innerHandler,
+		level:   levelHolder,
+	})
 }
 
 func loadConfig() error {
@@ -238,6 +244,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	info, err := os.Stat(configFileName)
+	if err == nil {
+		configMTime = info.ModTime()
+	}
+
 	initLogger()
 
 	loc, err := time.LoadLocation("Asia/Shanghai")
@@ -270,7 +281,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ss := NewHTTPStaticServer(gcfg.Root, gcfg.NoIndex)
+	ss = NewHTTPStaticServer(gcfg.Root, gcfg.NoIndex)
 	ss.Prefix = gcfg.Prefix
 	ss.Theme = gcfg.Theme
 	ss.Title = gcfg.Title
@@ -406,6 +417,9 @@ func main() {
 		Handler: mainRouter,
 		Addr:    gcfg.Addr,
 	}
+
+	go startHotReload()
+	infoLog("配置热加载已启动 (每 %v 检测一次)", hotReloadInterval)
 
 	err = nil
 	if gcfg.Key != "" && gcfg.Cert != "" {
