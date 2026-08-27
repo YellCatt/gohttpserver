@@ -285,12 +285,12 @@ var vm = new Vue({
       })
     },
     makeDirectory: function () {
-      var name = window.prompt("current path: " + location.pathname + "\nplease enter the new directory name", "")
+      var name = window.prompt("当前路径: " + location.pathname + "\n请输入新目录名称", "")
       if (!name) {
         return
       }
       if(!checkPathNameLegal(name)) {
-        alert("Name should not contains any of \\/:*<>|")
+        alert("名称不能包含 \\/:*<>| 等特殊字符")
         return
       }
       console.log('[DEBUG] 创建目录:', name, '当前路径:', location.pathname);
@@ -310,7 +310,7 @@ var vm = new Vue({
     deletePathConfirm: function (f, e) {
       e.preventDefault();
       if (!e.altKey) {
-        if (!window.confirm("Delete " + f.name + " ?")) {
+        if (!window.confirm("确定删除 " + f.name + " ？")) {
           return;
         }
       }

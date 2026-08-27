@@ -22,7 +22,7 @@
       <div class="container">
         <div class="navbar-header">
           <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#bs-example-navbar-collapse-2">
-            <span class="sr-only">Toggle navigation</span>
+            <span class="sr-only">切换导航</span>
             <span class="icon-bar"></span>
             <span class="icon-bar"></span>
             <span class="icon-bar"></span>
@@ -33,14 +33,14 @@
           <ul class="nav navbar-nav">
             <li class="hidden-xs">
               <a href="javascript:void(0)" v-on:click='genQrcode()'>
-                View in Phone
+                手机查看
                 <span class="glyphicon glyphicon-qrcode"></span>
               </a>
             </li>
             [[if eq .AuthType "openid"]]
             <template v-if="!user.email">
               <a href="/-/login" class="btn btn-sm btn-default navbar-btn">
-                Sign in <span class="glyphicon glyphicon-user"></span>
+                登录 <span class="glyphicon glyphicon-user"></span>
               </a>
             </template>
             <template v-else>
@@ -53,7 +53,7 @@
             [[if eq .AuthType "oauth2-proxy"]]
             <template v-if="!user.email">
                 <a href="#" class="btn btn-sm btn-default navbar-btn">
-                    Guest <span class="glyphicon glyphicon-user"></span>
+                    访客 <span class="glyphicon glyphicon-user"></span>
                 </a>
             </template>
             <template v-else>
@@ -68,7 +68,7 @@
           [[if not .NoIndex ]]
           <form class="navbar-form navbar-right">
             <div class="input-group">
-              <input type="text" name="search" class="form-control" placeholder="Search text" v-bind:value="search"
+              <input type="text" name="search" class="form-control" placeholder="搜索" v-bind:value="search"
                 autofocus>
               <span class="input-group-btn">
                 <button class="btn btn-default" type="submit">
@@ -106,27 +106,27 @@
               </button> -->
               <div>
                 <button class="btn btn-xs btn-default" onclick="history.back()">
-                  Back <i class="fa fa-arrow-left"></i>
+                  返回 <i class="fa fa-arrow-left"></i>
                 </button>
                 <button class="btn btn-xs btn-default" v-on:click='toggleHidden()'>
-                  Hidden <i class="fa" v-bind:class='showHidden ? "fa-eye" : "fa-eye-slash"'></i>
+                  隐藏 <i class="fa" v-bind:class='showHidden ? "fa-eye" : "fa-eye-slash"'></i>
                 </button>
                 <button class="btn btn-xs btn-default" v-show="auth.upload" data-toggle="modal" data-target="#upload-modal">
-                  Upload <i class="fa fa-upload"></i>
+                  上传 <i class="fa fa-upload"></i>
                 </button>
                 <button class="btn btn-xs btn-default" v-show="auth.delete" @click="makeDirectory">
-                  New Folder <i class="fa fa-folder"></i>
+                  新建文件夹 <i class="fa fa-folder"></i>
                 </button>
               </div>
             </td>
           </tr>
           <tr>
-            <th>Name</th>
-            <th>Size</th>
+            <th>名称</th>
+            <th>大小</th>
             <th class="hidden-xs">
-              <span style="cursor: pointer" v-on:click='mtimeTypeFromNow = !mtimeTypeFromNow'>ModTime</span>
+              <span style="cursor: pointer" v-on:click='mtimeTypeFromNow = !mtimeTypeFromNow'>修改时间</span>
             </th>
-            <th>Actions</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -156,7 +156,7 @@
             <td style="text-align: left">
               <template v-if="f.type == 'dir'">
                 <a class="btn btn-default btn-xs" href="{{getEncodePath(f.name)}}/?op=archive">
-                  <span class="hidden-xs">Archive</span> Zip
+                  <span class="hidden-xs">打包</span> 压缩
                   <span class="glyphicon glyphicon-download-alt"></span>
                 </a>
                 <button class="btn btn-default btn-xs" v-on:click="showInfo(f)">
@@ -168,10 +168,10 @@
               </template>
               <template v-if="f.type == 'file'">
                 <a class="btn btn-default btn-xs hidden-xs" href="{{genDownloadURL(f)}}">
-                  <span class="hidden-xs">Download</span>
+                  <span class="hidden-xs">下载</span>
                   <span class="glyphicon glyphicon-download-alt"></span>
                 </a>
-                <button class="btn btn-default btn-xs bstooltip" data-trigger="manual" data-title="Copied!"
+                <button class="btn btn-default btn-xs bstooltip" data-trigger="manual" data-title="已复制！"
                   data-clipboard-text="{{genDownloadURL(f)}}">
                   <i class="fa fa-copy"></i>
                 </button>
@@ -179,11 +179,11 @@
                   <span class="glyphicon glyphicon-info-sign"></span>
                 </button>
                 <button class="btn btn-default btn-xs hidden-xs" v-on:click="genQrcode(f.name)">
-                  <span v-if="shouldHaveQrcode(f.name)">QRCode</span>
+                  <span v-if="shouldHaveQrcode(f.name)">二维码</span>
                   <span class="glyphicon glyphicon-qrcode"></span>
                 </button>
                 <a class="btn btn-default btn-xs visible-xs" v-if="shouldHaveQrcode(f.name)" href="{{genInstallURL(f.name)}}">
-                  Install <i class="fa fa-cube"></i>
+                  安装 <i class="fa fa-cube"></i>
                 </a>
                 <button class="btn btn-default btn-xs" v-if="auth.delete" v-on:click="deletePathConfirm(f, $event)">
                   <span style="color:#CC3300" class="glyphicon glyphicon-trash"></span>
@@ -217,7 +217,7 @@
               <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
               <h4 class="modal-title">
                 <span id="qrcode-title"></span>
-                <a style="font-size: 0.6em" href="#" id="qrcode-link">[view]</a>
+                <a style="font-size: 0.6em" href="#" id="qrcode-link">[查看]</a>
               </h4>
             </div>
             <div class="modal-body clearfix">
@@ -238,15 +238,15 @@
             <div class="modal-header">
               <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
               <h4 class="modal-title">
-                <i class="fa fa-upload"></i> File upload
+                <i class="fa fa-upload"></i> 文件上传
               </h4>
             </div>
             <div class="modal-body">
               <form action="#" class="dropzone" id="upload-form"></form>
             </div>
             <div class="modal-footer">
-              <button type="button" class="btn btn-default" @click="removeAllUploads">RemoveAll</button>
-              <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+              <button type="button" class="btn btn-default" @click="removeAllUploads">全部移除</button>
+              <button type="button" class="btn btn-default" data-dismiss="modal">关闭</button>
             </div>
           </div>
         </div>
