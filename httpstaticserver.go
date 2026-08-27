@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/ioutil"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -302,11 +303,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 
 	debugLog("权限检查通过: 上传权限=%v 删除权限=%v", auth.Upload, auth.Delete)
 
-	file, header, err := req.FormFile("file")
-
-	dirExisted := true
 	if _, err := os.Stat(dirpath); os.IsNotExist(err) {
-		dirExisted = false
 		debugLog("目录不存在，准备创建: %s", absDirpath)
 		if err := os.MkdirAll(dirpath, os.ModePerm); err != nil {
 			errorLog("创建目录失败: 绝对路径=%s 错误=%v", absDirpath, err)
@@ -316,11 +313,9 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		infoLog("创建目录: 绝对路径=%s", absDirpath)
 	}
 
-	if file == nil {
-		if dirExisted {
-			infoLog("目录已存在，无需创建: 绝对路径=%s", absDirpath)
-		}
-		debugLog("仅创建目录请求，无文件上传")
+	reader, err := req.MultipartReader()
+	if err != nil {
+		debugLog("非multipart请求，可能是仅创建目录: %s", absDirpath)
 		w.Header().Set("Content-Type", "application/json;charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":     true,
@@ -329,21 +324,55 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	if err != nil {
-		errorLog("解析上传表单失败: 绝对路径=%s 错误=%v", absDirpath, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	var filePart *multipart.Part
+	var fileFallbackName string
+	var filenameOverride string
+	var unzipFlag bool
+
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			errorLog("读取multipart part失败: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		switch part.FormName() {
+		case "file":
+			fileFallbackName = part.FileName()
+			filePart = part
+		case "filename":
+			buf, _ := io.ReadAll(part)
+			filenameOverride = string(buf)
+			part.Close()
+		case "unzip":
+			buf, _ := io.ReadAll(part)
+			unzipFlag = (string(buf) == "true")
+			part.Close()
+		default:
+			part.Close()
+		}
+	}
+
+	if filePart == nil {
+		debugLog("仅创建目录请求，无文件上传: %s", absDirpath)
+		w.Header().Set("Content-Type", "application/json;charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":     true,
+			"destination": dirpath,
+		})
 		return
 	}
-	defer func() {
-		file.Close()
-		req.MultipartForm.RemoveAll()
-	}()
+	defer filePart.Close()
 
-	filename := req.FormValue("filename")
+	filename := filenameOverride
 	if filename == "" {
-		filename = header.Filename
+		filename = fileFallbackName
 	}
-	debugLog("上传文件信息: 原始文件名=%s 目标文件名=%s 大小=%d", header.Filename, filename, header.Size)
+	debugLog("上传文件信息: 原始文件名=%s 目标文件名=%s", fileFallbackName, filename)
 
 	if err := checkFilename(filename); err != nil {
 		errorLog("文件名不合法: %s 错误=%v", filename, err)
@@ -357,25 +386,25 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	isModify := fileExistErr == nil
 
 	if isModify {
-		infoLog("开始修改文件: 文件名=%s 大小=%d 绝对路径=%s", filename, header.Size, absDstPath)
+		infoLog("开始修改文件: 文件名=%s 绝对路径=%s", filename, absDstPath)
 	} else {
-		infoLog("开始创建文件: 文件名=%s 大小=%d 绝对路径=%s", filename, header.Size, absDstPath)
+		infoLog("开始创建文件: 文件名=%s 绝对路径=%s", filename, absDstPath)
 	}
 
-	var copyErr error
 	dst, err := os.Create(dstPath)
 	if err != nil {
 		errorLog("创建文件失败: 绝对路径=%s 错误=%v", absDstPath, err)
 		http.Error(w, "文件创建失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer dst.Close()
 
 	buf := s.bufPool.Get().([]byte)
 	defer s.bufPool.Put(buf)
-	written, copyErr := io.CopyBuffer(dst, file, buf)
-	dst.Close()
+	written, copyErr := io.CopyBuffer(dst, filePart, buf)
 	if copyErr != nil {
 		errorLog("写入文件失败: 绝对路径=%s 已写入=%d 错误=%v", absDstPath, written, copyErr)
+		os.Remove(dstPath)
 		http.Error(w, copyErr.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -384,7 +413,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 
-	if req.FormValue("unzip") == "true" {
+	if unzipFlag {
 		infoLog("开始解压: 源=%s 目标目录=%s", absDstPath, absDirpath)
 		err = unzipFile(dstPath, dirpath)
 		os.Remove(dstPath)
