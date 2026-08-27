@@ -857,7 +857,7 @@ func (c *AccessConf) canUploadByToken(token string) bool {
 }
 
 func (c *AccessConf) canUpload(r *http.Request) bool {
-	token := r.FormValue("token")
+	token := r.URL.Query().Get("token")
 	if token != "" {
 		return c.canUploadByToken(token)
 	}
