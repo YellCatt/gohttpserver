@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -688,18 +689,45 @@ func (c *AccessConf) canAccess(fileName string) bool {
 	return true
 }
 
-func (c *AccessConf) canDelete(r *http.Request) bool {
+func (c *AccessConf) getCurrentUser(r *http.Request) *UserInfo {
+	if gcfg.Auth.Type == "http" {
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Basic ") {
+			payload, err := base64.StdEncoding.DecodeString(auth[6:])
+			if err == nil {
+				parts := strings.SplitN(string(payload), ":", 2)
+				if len(parts) == 2 {
+					return &UserInfo{
+						Id:       parts[0],
+						Name:     parts[0],
+						Email:    parts[0],
+						NickName: parts[0],
+					}
+				}
+			}
+		}
+		return nil
+	}
+
 	session, err := store.Get(r, defaultSessionName)
 	if err != nil {
-		return c.Delete
+		return nil
 	}
 	val := session.Values["user"]
 	if val == nil {
-		return c.Delete
+		return nil
 	}
 	userInfo := val.(*UserInfo)
+	return userInfo
+}
+
+func (c *AccessConf) canDelete(r *http.Request) bool {
+	userInfo := c.getCurrentUser(r)
+	if userInfo == nil {
+		return c.Delete
+	}
 	for _, rule := range c.Users {
 		if rule.Email == userInfo.Email {
+			debugLog("用户 %s 匹配权限规则: delete=%v", userInfo.Email, rule.Delete)
 			return rule.Delete
 		}
 	}
@@ -720,18 +748,13 @@ func (c *AccessConf) canUpload(r *http.Request) bool {
 	if token != "" {
 		return c.canUploadByToken(token)
 	}
-	session, err := store.Get(r, defaultSessionName)
-	if err != nil {
+	userInfo := c.getCurrentUser(r)
+	if userInfo == nil {
 		return c.Upload
 	}
-	val := session.Values["user"]
-	if val == nil {
-		return c.Upload
-	}
-	userInfo := val.(*UserInfo)
-
 	for _, rule := range c.Users {
 		if rule.Email == userInfo.Email {
+			debugLog("用户 %s 匹配权限规则: upload=%v", userInfo.Email, rule.Upload)
 			return rule.Upload
 		}
 	}
