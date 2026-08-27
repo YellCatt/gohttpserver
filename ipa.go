@@ -30,7 +30,7 @@ func parseIpaIcon(path string) (data []byte, err error) {
 		}
 	}
 	if zfile == nil {
-		err = errors.New("icon.png file not found")
+		err = errors.New("未找到icon.png图标文件")
 		return
 	}
 	plreader, err := zfile.Open()
@@ -57,7 +57,7 @@ func parseIPA(path string) (plinfo *plistBundle, err error) {
 		}
 	}
 	if plfile == nil {
-		err = errors.New("Info.plist file not found")
+		err = errors.New("未找到Info.plist配置文件")
 		return
 	}
 	plreader, err := plfile.Open()
