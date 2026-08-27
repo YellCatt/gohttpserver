@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -293,7 +294,22 @@ func countDirFiles(dir string) int {
 func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Request) {
 	dirpath := s.getRealPath(req)
 	absDirpath := s.absPath(dirpath)
-	debugLog("上传/建目录请求: 方法=%s 目录=%s 绝对路径=%s 内容类型=%s", req.Method, dirpath, absDirpath, req.Header.Get("Content-Type"))
+	contentLength := req.ContentLength
+	debugLog("上传/建目录请求: 方法=%s 目录=%s 绝对路径=%s 内容类型=%s Content-Length=%d RemoteAddr=%s",
+		req.Method, dirpath, absDirpath, req.Header.Get("Content-Type"), contentLength, req.RemoteAddr)
+
+	if contentLength > 0 {
+		debugLog("请求体大小: %d bytes (%.2f MB)", contentLength, float64(contentLength)/1024/1024)
+	} else {
+		debugLog("请求体大小未知 (chunked encoding 或无内容)")
+	}
+
+	memStats := &runtime.MemStats{}
+	runtime.ReadMemStats(memStats)
+	debugLog("上传前内存状态: HeapAlloc=%d (%.2f MB) HeapSys=%d (%.2f MB) NumGC=%d",
+		memStats.HeapAlloc, float64(memStats.HeapAlloc)/1024/1024,
+		memStats.HeapSys, float64(memStats.HeapSys)/1024/1024,
+		memStats.NumGC)
 
 	auth := s.readAccessConf(dirpath)
 	if !auth.canUpload(req) {
@@ -314,9 +330,10 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		infoLog("创建目录: 绝对路径=%s", absDirpath)
 	}
 
+	debugLog("开始解析multipart请求...")
 	reader, err := req.MultipartReader()
 	if err != nil {
-		debugLog("非multipart请求，可能是仅创建目录: %s", absDirpath)
+		debugLog("非multipart请求，可能是仅创建目录: %s 错误=%v", absDirpath, err)
 		w.Header().Set("Content-Type", "application/json;charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":     true,
@@ -329,31 +346,39 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	var fileFallbackName string
 	var filenameOverride string
 	var unzipFlag bool
+	partCount := 0
 
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
+			debugLog("multipart解析完成，共处理 %d 个part", partCount)
 			break
 		}
 		if err != nil {
-			errorLog("读取multipart part失败: %v", err)
+			errorLog("读取multipart part失败(第%d个part): %v", partCount+1, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		partCount++
+		debugLog("解析multipart part #%d: FormName=%s FileName=%s", partCount, part.FormName(), part.FileName())
 
 		switch part.FormName() {
 		case "file":
 			fileFallbackName = part.FileName()
 			filePart = part
+			debugLog("找到文件part: 原始文件名=%s", fileFallbackName)
 		case "filename":
 			buf, _ := io.ReadAll(part)
 			filenameOverride = string(buf)
+			debugLog("读取filename覆盖值: %s", filenameOverride)
 			part.Close()
 		case "unzip":
 			buf, _ := io.ReadAll(part)
 			unzipFlag = (string(buf) == "true")
+			debugLog("读取unzip标志: %v", unzipFlag)
 			part.Close()
 		default:
+			debugLog("忽略未知part: FormName=%s", part.FormName())
 			part.Close()
 		}
 	}
@@ -373,7 +398,7 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	if filename == "" {
 		filename = fileFallbackName
 	}
-	debugLog("上传文件信息: 原始文件名=%s 目标文件名=%s", fileFallbackName, filename)
+	debugLog("上传文件信息: 原始文件名=%s 目标文件名=%s Content-Length=%d", fileFallbackName, filename, contentLength)
 
 	if err := checkFilename(filename); err != nil {
 		errorLog("文件名不合法: %s 错误=%v", filename, err)
@@ -400,17 +425,33 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	}
 	defer dst.Close()
 
+	memStats2 := &runtime.MemStats{}
+	runtime.ReadMemStats(memStats2)
+	debugLog("开始写入前内存: HeapAlloc=%d (%.2f MB) GC次数=%d",
+		memStats2.HeapAlloc, float64(memStats2.HeapAlloc)/1024/1024, memStats2.NumGC)
+
 	buf := s.bufPool.Get().([]byte)
-	defer s.bufPool.Put(buf)
-	written, copyErr := io.CopyBuffer(dst, filePart, buf)
+	debugLog("获取写入缓冲区: 大小=%d bytes", len(buf))
+
+	written, copyErr := s.copyWithProgress(dst, filePart, buf, filename)
+
+	s.bufPool.Put(buf)
+
 	if copyErr != nil {
-		errorLog("写入文件失败: 绝对路径=%s 已写入=%d 错误=%v", absDstPath, written, copyErr)
+		errorLog("写入文件失败: 绝对路径=%s 已写入=%d (%.2f MB) 错误=%v",
+			absDstPath, written, float64(written)/1024/1024, copyErr)
 		os.Remove(dstPath)
 		http.Error(w, copyErr.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	infoLog("文件操作完成: 文件名=%s 大小=%d 绝对路径=%s", filename, written, absDstPath)
+	infoLog("文件操作完成: 文件名=%s 大小=%d (%.2f MB) 绝对路径=%s",
+		filename, written, float64(written)/1024/1024, absDstPath)
+
+	memStats3 := &runtime.MemStats{}
+	runtime.ReadMemStats(memStats3)
+	debugLog("写入完成后内存: HeapAlloc=%d (%.2f MB) GC次数=%d",
+		memStats3.HeapAlloc, float64(memStats3.HeapAlloc)/1024/1024, memStats3.NumGC)
 
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 
@@ -438,6 +479,79 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		"destination": dstPath,
 	})
 }
+
+func (s *HTTPStaticServer) copyWithProgress(dst io.Writer, src io.Reader, buf []byte, filename string) (written int64, err error) {
+	startTime := time.Now()
+	debugLog("开始复制文件: 缓冲区大小=%d bytes 文件名=%s", len(buf), filename)
+
+	var copyBuf []byte
+	if buf != nil && len(buf) > 0 {
+		copyBuf = buf
+	} else {
+		copyBuf = make([]byte, 32*1024)
+	}
+
+	written = 0
+	lastLogTime := startTime
+	lastLogBytes := int64(0)
+
+	for {
+		nr, er := src.Read(copyBuf)
+		if nr > 0 {
+			nw, ew := dst.Write(copyBuf[0:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = errShortWrite
+				}
+			}
+			written += int64(nw)
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = errShortWrite
+				break
+			}
+
+			now := time.Now()
+			bytesSinceLast := written - lastLogBytes
+			if bytesSinceLast >= 5*1024*1024 || now.Sub(lastLogTime) >= 5*time.Second {
+				memStats := &runtime.MemStats{}
+				runtime.ReadMemStats(memStats)
+				elapsed := now.Sub(startTime)
+				speed := float64(written) / elapsed.Seconds()
+				debugLog("上传进度: 已写入=%d (%.2f MB) 速度=%.2f MB/s 耗时=%v HeapAlloc=%d (%.2f MB)",
+					written, float64(written)/1024/1024,
+					speed/1024/1024, elapsed,
+					memStats.HeapAlloc, float64(memStats.HeapAlloc)/1024/1024)
+				lastLogTime = now
+				lastLogBytes = written
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+
+	if err != nil {
+		debugLog("复制过程出错: 已写入=%d (%.2f MB) 耗时=%v 错误=%v",
+			written, float64(written)/1024/1024, time.Since(startTime), err)
+		return
+	}
+
+	elapsed := time.Since(startTime)
+	speed := float64(written) / elapsed.Seconds()
+	debugLog("文件复制完成: 总大小=%d (%.2f MB) 耗时=%v 速度=%.2f MB/s 文件名=%s",
+		written, float64(written)/1024/1024, elapsed, speed/1024/1024, filename)
+	return
+}
+
+var errShortWrite = errors.New("short write")
 
 type FileJSONInfo struct {
 	Name    string      `json:"name"`
