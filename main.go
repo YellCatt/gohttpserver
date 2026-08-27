@@ -371,7 +371,10 @@ func main() {
 	switch gcfg.Auth.Type {
 	case "http":
 		debugLog("注册HTTP Basic Auth路由: /-/user")
-		router.HandleFunc("/-/user", handleBasicAuthUser)
+		router.HandleFunc("/-/user", func(w http.ResponseWriter, r *http.Request) {
+			debugLog("路由匹配 /-/user: method=%s url=%s header=%v", r.Method, r.URL.String(), r.Header.Get("Authorization"))
+			handleBasicAuthUser(w, r)
+		})
 	case "openid":
 		debugLog("注册OpenID认证路由: /-/login /-/user /-/logout /-/openidcallback")
 		handleOpenID(gcfg.Auth.OpenID, false, router)

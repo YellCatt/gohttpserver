@@ -164,6 +164,9 @@ func (s *HTTPStaticServer) absPath(p string) string {
 
 func (s *HTTPStaticServer) hIndex(w http.ResponseWriter, r *http.Request) {
 	path := mux.Vars(r)["path"]
+	if strings.HasPrefix(path, "/-/") {
+		warnLog("hIndex收到系统接口请求(可能路由未匹配): path=%s url=%s", path, r.URL.String())
+	}
 	realPath := s.getRealPath(r)
 	absPath := s.absPath(realPath)
 
