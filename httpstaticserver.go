@@ -228,7 +228,19 @@ func (s *HTTPStaticServer) hIndex(w http.ResponseWriter, r *http.Request) {
 		} else {
 			debugLog("返回文件内容: %s 大小=%d MIME类型=%s", absPath, fi.Size(), mime.TypeByExtension(filepath.Ext(path)))
 		}
-		http.ServeFile(w, r, realPath)
+		file, openErr := os.Open(realPath)
+		if openErr != nil {
+			errorLog("打开文件失败: %s 错误=%v", absPath, openErr)
+			http.Error(w, openErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+		contentType := mime.TypeByExtension(filepath.Ext(path))
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+		io.Copy(w, file)
 	}
 }
 
@@ -355,7 +367,8 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	var fileFallbackName string
 	var filenameOverride string
 	var unzipFlag bool
-	var fileTempPath string
+	var wroteFile bool
+	var wrotePath string
 	partCount := 0
 	hasFile := false
 
@@ -378,30 +391,67 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 			fileFallbackName = part.FileName()
 			hasFile = true
 			debugLog("找到文件part: 原始文件名=%s", fileFallbackName)
-			tmpFile, tmpErr := os.CreateTemp("", "gohttpserver-upload-*")
-			if tmpErr != nil {
-				errorLog("创建临时文件失败: %v", tmpErr)
-				http.Error(w, tmpErr.Error(), http.StatusInternalServerError)
+			filename := filenameOverride
+			if filename == "" {
+				filename = fileFallbackName
+			}
+			if err := checkFilename(filename); err != nil {
+				errorLog("文件名不合法: %s 错误=%v", filename, err)
+				http.Error(w, err.Error(), http.StatusForbidden)
 				return
 			}
-			fileTempPath = tmpFile.Name()
-			tmpBuf := s.bufPool.Get().([]byte)
-			fileWritten, copyErr := s.copyWithProgress(tmpFile, part, tmpBuf, fileFallbackName)
-			s.bufPool.Put(tmpBuf)
-			tmpFile.Close()
+			dstPath := filepath.Join(dirpath, filename)
+			absDstPath := s.absPath(dstPath)
+			_, fileExistErr := os.Stat(dstPath)
+			isModify := fileExistErr == nil
+			if isModify {
+				infoLog("开始修改文件: 文件名=%s 绝对路径=%s", filename, absDstPath)
+			} else {
+				infoLog("开始创建文件: 文件名=%s 绝对路径=%s", filename, absDstPath)
+			}
+			dst, createErr := os.Create(dstPath)
+			if createErr != nil {
+				errorLog("创建文件失败: 绝对路径=%s 错误=%v", absDstPath, createErr)
+				http.Error(w, "文件创建失败: "+createErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			memStats2 := &runtime.MemStats{}
+			runtime.ReadMemStats(memStats2)
+			debugLog("开始写入前内存: HeapAlloc=%d (%.2f MB) GC次数=%d",
+				memStats2.HeapAlloc, float64(memStats2.HeapAlloc)/1024/1024, memStats2.NumGC)
+			buf := s.bufPool.Get().([]byte)
+			fileWritten, copyErr := s.copyWithProgress(dst, part, buf, filename)
+			s.bufPool.Put(buf)
+			dst.Close()
 			if copyErr != nil {
-				errorLog("写入临时文件失败: %v", copyErr)
-				os.Remove(fileTempPath)
+				errorLog("写入文件失败: 绝对路径=%s 已写入=%d (%.2f MB) 错误=%v",
+					absDstPath, fileWritten, float64(fileWritten)/1024/1024, copyErr)
+				os.Remove(dstPath)
 				http.Error(w, copyErr.Error(), http.StatusInternalServerError)
 				return
 			}
-			debugLog("文件数据已保存到临时文件: %s 大小=%d (%.2f MB)",
-				fileTempPath, fileWritten, float64(fileWritten)/1024/1024)
+			wroteFile = true
+			wrotePath = dstPath
+			debugLog("文件数据已直接保存: %s 大小=%d (%.2f MB)",
+				dstPath, fileWritten, float64(fileWritten)/1024/1024)
 		case "filename":
 			buf, _ := io.ReadAll(part)
 			filenameOverride = string(buf)
 			debugLog("读取filename覆盖值: %s", filenameOverride)
 			part.Close()
+			if wroteFile {
+				oldPath := wrotePath
+				newPath := filepath.Join(dirpath, filenameOverride)
+				if err := checkFilename(filenameOverride); err == nil {
+					renameErr := os.Rename(oldPath, newPath)
+					if renameErr != nil {
+						errorLog("重命名文件失败: %s -> %s 错误=%v", oldPath, newPath, renameErr)
+					} else {
+						infoLog("文件已重命名: %s -> %s", oldPath, newPath)
+						wrotePath = newPath
+					}
+				}
+			}
 		case "unzip":
 			buf, _ := io.ReadAll(part)
 			unzipFlag = (string(buf) == "true")
@@ -422,7 +472,6 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 		})
 		return
 	}
-	defer os.Remove(fileTempPath)
 
 	filename := filenameOverride
 	if filename == "" {
@@ -430,61 +479,16 @@ func (s *HTTPStaticServer) hUploadOrMkdir(w http.ResponseWriter, req *http.Reque
 	}
 	debugLog("上传文件信息: 原始文件名=%s 目标文件名=%s Content-Length=%d", fileFallbackName, filename, contentLength)
 
-	if err := checkFilename(filename); err != nil {
-		errorLog("文件名不合法: %s 错误=%v", filename, err)
-		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-
-	dstPath := filepath.Join(dirpath, filename)
+	dstPath := wrotePath
 	absDstPath := s.absPath(dstPath)
-	_, fileExistErr := os.Stat(dstPath)
-	isModify := fileExistErr == nil
-
-	if isModify {
-		infoLog("开始修改文件: 文件名=%s 绝对路径=%s", filename, absDstPath)
-	} else {
-		infoLog("开始创建文件: 文件名=%s 绝对路径=%s", filename, absDstPath)
-	}
-
-	dst, err := os.Create(dstPath)
-	if err != nil {
-		errorLog("创建文件失败: 绝对路径=%s 错误=%v", absDstPath, err)
-		http.Error(w, "文件创建失败: "+err.Error(), http.StatusInternalServerError)
+	fi, statErr := os.Stat(dstPath)
+	if statErr != nil {
+		errorLog("获取目标文件信息失败: %s 错误=%v", absDstPath, statErr)
+		http.Error(w, statErr.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer dst.Close()
-
-	memStats2 := &runtime.MemStats{}
-	runtime.ReadMemStats(memStats2)
-	debugLog("开始写入前内存: HeapAlloc=%d (%.2f MB) GC次数=%d",
-		memStats2.HeapAlloc, float64(memStats2.HeapAlloc)/1024/1024, memStats2.NumGC)
-
-	tmpSrc, err := os.Open(fileTempPath)
-	if err != nil {
-		errorLog("打开临时文件失败: %s 错误=%v", fileTempPath, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer tmpSrc.Close()
-
-	buf := s.bufPool.Get().([]byte)
-	debugLog("获取写入缓冲区: 大小=%d bytes", len(buf))
-
-	written, copyErr := s.copyWithProgress(dst, tmpSrc, buf, filename)
-
-	s.bufPool.Put(buf)
-
-	if copyErr != nil {
-		errorLog("写入文件失败: 绝对路径=%s 已写入=%d (%.2f MB) 错误=%v",
-			absDstPath, written, float64(written)/1024/1024, copyErr)
-		os.Remove(dstPath)
-		http.Error(w, copyErr.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	infoLog("文件操作完成: 文件名=%s 大小=%d (%.2f MB) 绝对路径=%s",
-		filename, written, float64(written)/1024/1024, absDstPath)
+		filename, fi.Size(), float64(fi.Size())/1024/1024, absDstPath)
 
 	memStats3 := &runtime.MemStats{}
 	runtime.ReadMemStats(memStats3)
